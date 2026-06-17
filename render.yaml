@@ -21,14 +21,16 @@ services:
   - type: web
     name: rated-api
     runtime: python
+    repo: https://github.com/IamJasonBian/rated
     rootDir: build/backend
     plan: free            # 0.1 CPU / 512 MB RAM, sleeps after 15min idle
     region: oregon
     branch: main
     healthCheckPath: /healthz
     buildCommand: pip install -r requirements.txt
-    preDeployCommand: alembic upgrade head   # idempotent schema upgrade
-    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    # Free tier doesn't support preDeployCommand, so run the (idempotent) schema
+    # upgrade at boot, right before uvicorn. Safe to re-run on every restart.
+    startCommand: alembic upgrade head && uvicorn api:app --host 0.0.0.0 --port $PORT
     envVars:
       # Pin Python so prod matches a runtime with prebuilt wheels (psycopg etc.).
       - key: PYTHON_VERSION
@@ -62,14 +64,14 @@ services:
   - type: web
     name: rated-api-staging
     runtime: python
+    repo: https://github.com/IamJasonBian/rated
     rootDir: build/backend
     plan: free
     region: oregon
     branch: main
     healthCheckPath: /healthz
     buildCommand: pip install -r requirements.txt
-    preDeployCommand: alembic upgrade head
-    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    startCommand: alembic upgrade head && uvicorn api:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.7"
