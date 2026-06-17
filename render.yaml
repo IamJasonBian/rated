@@ -43,6 +43,12 @@ services:
       # (Environment tab). Comma-separate to issue multiple tokens.
       - key: AGENT_API_TOKEN
         generateValue: true
+      # Optional: dedicated HMAC key for pre-signed Records URLs (see
+      # build/backend/sign_url.py). Lets signed URLs be revoked by rotating this
+      # key without disturbing AGENT_API_TOKEN. If unset, signed URLs fall back
+      # to signing with AGENT_API_TOKEN. Set in the dashboard (Environment tab).
+      - key: RECORDS_SIGNING_KEY
+        sync: false
       - key: ALLOWED_ORIGINS
         value: https://silver-salamander-08daf4.netlify.app
       - key: SESSION_TTL_SECONDS

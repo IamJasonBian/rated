@@ -20,6 +20,39 @@ token" you'd paste into any Airtable client. Set a comma-separated list to issue
 several tokens. Without the token you get `401`; if the server has no token
 configured at all you get `503` (fails closed, never open).
 
+### Pre-signed URLs (no secret in the URL)
+
+For a link that authenticates on its own — handed to a tool that can't send
+headers, or one that should "always work" — mint a **pre-signed URL**. It
+carries an HMAC *signature* in the query string instead of the raw token, so it
+can be shared or logged without leaking the key, and it's scoped to a path
+prefix:
+
+```
+?scope=<path-prefix>&exp=<unix-ts>&sig=<hmac>
+```
+
+- `scope` — the path prefix the signature grants, boundary-matched: `/v0`
+  authorizes the whole API; `/v0/app1/Contacts` authorizes just that table
+  (and `/v0/app1` would *not* grant `/v0/app1xyz`).
+- `exp` — unix expiry; `0` means **never expires**.
+- `sig` — `HMAC_SHA256(key, "<scope>\n<exp>")`, hex.
+
+Mint one with the helper (reads `RECORDS_SIGNING_KEY`, falling back to
+`AGENT_API_TOKEN`):
+
+```bash
+# Whole API, never expires — append the printed params to any /v0 path:
+python sign_url.py --scope /v0
+# One table, full URL, expires in 7 days:
+python sign_url.py --scope /v0/app1/Contacts --base "$BASE" --ttl 604800
+```
+
+Set a dedicated **`RECORDS_SIGNING_KEY`** in Render so signed URLs can be
+revoked (rotate the key) independently of the header token. If it's unset, URLs
+are signed with the `AGENT_API_TOKEN` value and editing that token invalidates
+them. Header/token auth keeps working unchanged alongside this.
+
 ## Shape
 
 The path and payloads mirror Airtable's REST API:

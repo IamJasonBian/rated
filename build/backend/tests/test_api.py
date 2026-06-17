@@ -1236,3 +1236,71 @@ def test_records_batch_create(client):
     recs = r.json()["records"]
     assert len(recs) == 2
     assert {x["fields"]["Title"] for x in recs} == {"A", "B"}
+
+
+# ─── Pre-signed URLs ──────────────────────────────────────────────────────────
+
+import presign as _presign
+
+
+def _signed(scope, exp=0):
+    """Query params for a pre-signed URL, keyed off the active AGENT_API_TOKEN."""
+    return {"scope": scope, "exp": exp, "sig": _presign.sign(scope, exp)}
+
+
+def test_presigned_url_grants_access_no_token(client):
+    """A valid signature lets a request through with no Authorization header —
+    read and write, across any path under the scope, forever (exp=0)."""
+    _enable_agent()
+    params = _signed("/v0/app1")
+    r = client.post("/v0/app1/Contacts", json={"fields": {"Name": "Pre"}}, params=params)
+    assert r.status_code == 200, r.text
+    r = client.get("/v0/app1/Contacts", params=params)
+    assert r.status_code == 200 and len(r.json()["records"]) == 1
+
+
+def test_presigned_url_rejects_out_of_scope_path(client):
+    """A URL signed for one table can't reach another."""
+    _enable_agent()
+    params = _signed("/v0/app1/Contacts")
+    r = client.get("/v0/app1/Films", params=params)
+    assert r.status_code == 401
+
+
+def test_presigned_url_scope_is_boundary_matched(client):
+    """Prefix match respects path segments — "/v0/app1" must not grant
+    "/v0/app1xyz"."""
+    _enable_agent()
+    params = _signed("/v0/app1")
+    r = client.get("/v0/app1xyz/Contacts", params=params)
+    assert r.status_code == 401
+
+
+def test_presigned_url_rejects_expired(client):
+    _enable_agent()
+    r = client.get("/v0/app1/Contacts", params=_signed("/v0/app1", exp=1))  # 1970
+    assert r.status_code == 401
+
+
+def test_presigned_url_rejects_tampered_signature(client):
+    _enable_agent()
+    r = client.get("/v0/app1/Contacts",
+                   params={"scope": "/v0/app1", "exp": 0, "sig": "deadbeef"})
+    assert r.status_code == 401
+
+
+def test_presigned_url_dedicated_signing_key(client):
+    """RECORDS_SIGNING_KEY, when set, is used instead of AGENT_API_TOKEN — so a
+    URL signed with the token alone stops working."""
+    _enable_agent()
+    token_sig = _signed("/v0/app1")
+    _os.environ["RECORDS_SIGNING_KEY"] = "a-separate-signing-key"
+    try:
+        # Old URL (signed with the token) is now rejected.
+        r = client.get("/v0/app1/Contacts", params=token_sig)
+        assert r.status_code == 401
+        # A URL signed with the dedicated key works.
+        r = client.get("/v0/app1/Contacts", params=_signed("/v0/app1"))
+        assert r.status_code == 200
+    finally:
+        _os.environ.pop("RECORDS_SIGNING_KEY", None)

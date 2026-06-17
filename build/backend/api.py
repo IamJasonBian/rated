@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 import httpx
 
+import presign
 from db import get_db, init_db, SessionLocal
 from logging_config import configure_logging, get_logger, init_sentry
 from models import FollowRow, MovieRow, RankingRow, ReviewRow, UserRow
@@ -237,27 +238,39 @@ def _records_public() -> bool:
 
 
 def require_agent(
+    request: Request,
     authorization: Optional[str] = Header(default=None),
     session_token: str = "",
+    scope: str = "",
+    exp: int = 0,
+    sig: str = "",
 ) -> bool:
-    """FastAPI dependency gating the Records API.
+    """FastAPI dependency gating the Records API. Three ways in:
 
     - RECORDS_PUBLIC truthy → open (public staging). Always allowed.
-    - Otherwise: 503 when no token is configured (fail closed, not open),
-      401 when the presented token is missing or wrong. Constant-time compared.
+    - A valid static token via `Authorization: Bearer` or `?session_token=`
+      (constant-time compared against AGENT_API_TOKEN).
+    - A valid HMAC pre-signed URL — `?scope=&exp=&sig=` — which carries a
+      signature instead of the raw secret, so the URL can be shared/logged
+      without leaking the key and is scoped to a path prefix. See presign.py.
+
+    Failure modes: 503 when nothing is configured (fail closed, not open),
+    401 when the presented credential is missing or wrong.
     """
     if _records_public():
         return True
     tokens = _agent_tokens()
-    if not tokens:
+    presented = _extract_token(authorization, session_token)
+    if presented and any(secrets.compare_digest(presented, t) for t in tokens):
+        return True
+    if sig and presign.verify(request.url.path, scope, exp, sig):
+        return True
+    if not tokens and not presign.signing_key():
         raise HTTPException(
             status_code=503,
             detail="Records API is disabled — set AGENT_API_TOKEN (or RECORDS_PUBLIC for a sandbox).",
         )
-    presented = _extract_token(authorization, session_token)
-    if not presented or not any(secrets.compare_digest(presented, t) for t in tokens):
-        raise HTTPException(status_code=401, detail="Invalid or missing API token")
-    return True
+    raise HTTPException(status_code=401, detail="Invalid or missing API token")
 
 
 # ─── Initial seed ─────────────────────────────────────────────────────────────
