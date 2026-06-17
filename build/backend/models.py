@@ -8,14 +8,26 @@ domain types (User, Movie, Ranking) that the API returns.
 
 from __future__ import annotations
 
+import datetime
 import time
 
 from sqlalchemy import (
-    Boolean, Column, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+    JSON, Boolean, Column, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
 from db import Base
+
+
+def _iso_utc(ts: float | None) -> str | None:
+    """Format a unix timestamp as Airtable's createdTime shape
+    (e.g. "2022-09-12T21:03:48.000Z"). None passes through."""
+    if ts is None:
+        return None
+    return (
+        datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
+        .strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    )
 
 
 class UserRow(Base):
@@ -282,4 +294,34 @@ class FeedReplyRow(Base):
             "item_id":    self.item_id,
             "body":       self.body,
             "created_at": self.created_at,
+        }
+
+
+class RecordRow(Base):
+    """A flexible, schema-less record — the building block of the Airtable-style
+    data layer. Each row belongs to a named `table` (e.g. "Contacts", "Films")
+    and stores its columns as a free-form JSON `fields` object, so a non-coder
+    can add/rename/remove fields from a data-entry tool without a migration.
+
+    `id` follows Airtable's record-id shape ("rec" + 14 hex chars) so clients
+    written against the Airtable REST API (pyairtable, airtable.js, n8n, etc.)
+    can be pointed at this backend by overriding only the base URL + token.
+    """
+    __tablename__ = "records"
+    __table_args__ = (
+        Index("ix_records_table_created", "table_name", "created_at"),
+    )
+
+    id          = Column(String, primary_key=True)
+    table_name  = Column(String, nullable=False)
+    fields      = Column(JSON, nullable=False, default=dict)
+    created_at  = Column(Float, nullable=False, default=lambda: time.time())
+    updated_at  = Column(Float, nullable=True)
+
+    def to_airtable(self) -> dict:
+        """Serialize in Airtable's record envelope: {id, createdTime, fields}."""
+        return {
+            "id":          self.id,
+            "createdTime": _iso_utc(self.created_at),
+            "fields":      self.fields or {},
         }

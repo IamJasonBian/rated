@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 from models import (
     UserRow, MovieRow, RankingRow, PairwiseRow,
     WatchlistRow, SavedRow, ReviewRow, FollowRow, SessionRow,
-    NotificationRow, ReportRow, FeedLikeRow, FeedReplyRow,
+    NotificationRow, ReportRow, FeedLikeRow, FeedReplyRow, RecordRow,
 )
 
 
@@ -832,6 +832,102 @@ class FeedReplyService:
         return out
 
 
+class RecordService:
+    """CRUD over the flexible, Airtable-shaped `records` table.
+
+    Every record is `{id, createdTime, fields}` where `fields` is a free-form
+    JSON object. Tables are created implicitly the first time a record is
+    written to a given table name — there's no schema to define up front, which
+    is what lets a non-technical user run data entry through an Airtable-style
+    tool while Claude instances read/write the same rows over the API token.
+    """
+
+    # Airtable record ids look like "rec" + 14 base62 chars. We use hex (a
+    # subset of base62) so the shape matches and clients that validate the
+    # "rec" prefix stay happy.
+    @staticmethod
+    def _gen_id() -> str:
+        return "rec" + secrets.token_hex(7)  # 14 hex chars
+
+    def list_tables(self, db: Session) -> list[dict]:
+        """Distinct table names with a record count each — a lightweight schema
+        listing so a client can discover what tables exist."""
+        rows = db.execute(
+            select(RecordRow.table_name, func.count(RecordRow.id))
+            .group_by(RecordRow.table_name)
+            .order_by(RecordRow.table_name)
+        ).all()
+        return [{"name": name, "record_count": int(count)} for name, count in rows]
+
+    def list_records(self, db: Session, table: str,
+                     limit: int = 100, offset: int = 0) -> list[RecordRow]:
+        return list(db.execute(
+            select(RecordRow)
+            .where(RecordRow.table_name == table)
+            .order_by(RecordRow.created_at.desc(), RecordRow.id)
+            .offset(offset).limit(limit)
+        ).scalars())
+
+    def count(self, db: Session, table: str) -> int:
+        return db.execute(
+            select(func.count()).select_from(RecordRow)
+            .where(RecordRow.table_name == table)
+        ).scalar() or 0
+
+    def get_record(self, db: Session, table: str, record_id: str) -> Optional[RecordRow]:
+        row = db.get(RecordRow, record_id)
+        if not row or row.table_name != table:
+            return None
+        return row
+
+    def create_records(self, db: Session, table: str,
+                       fields_list: list[dict]) -> list[RecordRow]:
+        """Insert one or more records into `table`. Each entry is a `fields`
+        dict. Returns the created rows in input order."""
+        if not table or not table.strip():
+            raise ValueError("table name is required")
+        created: list[RecordRow] = []
+        for fields in fields_list:
+            if not isinstance(fields, dict):
+                raise ValueError("each record's 'fields' must be an object")
+            row = RecordRow(id=self._gen_id(), table_name=table, fields=fields)
+            db.add(row)
+            created.append(row)
+        db.commit()
+        for row in created:
+            db.refresh(row)
+        return created
+
+    def update_record(self, db: Session, table: str, record_id: str,
+                      fields: dict, *, replace: bool = False) -> Optional[RecordRow]:
+        """PATCH (replace=False) merges the given fields into the existing
+        object; PUT (replace=True) swaps the whole fields object. Returns None
+        if the record doesn't exist in this table."""
+        if not isinstance(fields, dict):
+            raise ValueError("'fields' must be an object")
+        row = self.get_record(db, table, record_id)
+        if not row:
+            return None
+        if replace:
+            row.fields = fields
+        else:
+            merged = dict(row.fields or {})
+            merged.update(fields)
+            row.fields = merged
+        row.updated_at = time.time()
+        db.commit()
+        db.refresh(row)
+        return row
+
+    def delete_record(self, db: Session, table: str, record_id: str) -> bool:
+        row = self.get_record(db, table, record_id)
+        if not row:
+            return False
+        db.delete(row)
+        db.commit()
+        return True
+
+
 class App:
     """Holds the service singletons. They're stateless wrt persistence — all
     state lives in the SQLAlchemy session passed through each call."""
@@ -847,6 +943,7 @@ class App:
         self.report_service        = ReportService()
         self.feed_like_service     = FeedLikeService()
         self.feed_reply_service    = FeedReplyService()
+        self.record_service        = RecordService()
 
     def delete_account(self, db: Session, user_id: str) -> None:
         """Cascade-delete a user and every row that references them.
