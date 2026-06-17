@@ -1137,3 +1137,102 @@ def test_feed_reply_post_requires_self(client):
     _,    b_h  = _authed_login(client, sub="sub_rep_self_b", name="B", email="b@x.com")
     r = client.post(f"/users/{a_id}/feed-replies/f-x", json={"body": "hey"}, headers=b_h)
     assert r.status_code in (401, 403)
+
+
+# ─── Records API (flexible Airtable-compatible store) ─────────────────────────
+
+import os as _os
+
+_AGENT_TOK = "test-agent-token-123"
+
+
+def _agent_hdrs():
+    return {"Authorization": f"Bearer {_AGENT_TOK}"}
+
+
+def _enable_agent():
+    _os.environ["AGENT_API_TOKEN"] = _AGENT_TOK
+    _os.environ.pop("RECORDS_PUBLIC", None)
+
+
+def test_records_requires_token(client):
+    _enable_agent()
+    # No token → 401.
+    r = client.get("/v0/app1/Contacts")
+    assert r.status_code == 401
+
+
+def test_records_disabled_when_unconfigured(client):
+    _os.environ.pop("AGENT_API_TOKEN", None)
+    _os.environ.pop("RECORDS_PUBLIC", None)
+    r = client.get("/v0/app1/Contacts", headers=_agent_hdrs())
+    assert r.status_code == 503
+
+
+def test_records_public_mode_no_token(client):
+    """Staging: RECORDS_PUBLIC opens the API — read/write work tokenless."""
+    _os.environ.pop("AGENT_API_TOKEN", None)
+    _os.environ["RECORDS_PUBLIC"] = "true"
+    try:
+        r = client.post("/v0/app1/Sandbox", json={"fields": {"x": 1}})
+        assert r.status_code == 200, r.text
+        r = client.get("/v0/app1/Sandbox")
+        assert r.status_code == 200 and len(r.json()["records"]) == 1
+    finally:
+        _os.environ.pop("RECORDS_PUBLIC", None)
+
+
+def test_records_crud_roundtrip(client):
+    _enable_agent()
+    # Create (single shape).
+    r = client.post("/v0/app1/Contacts",
+                    json={"fields": {"Name": "Ada", "Status": "Lead"}},
+                    headers=_agent_hdrs())
+    assert r.status_code == 200, r.text
+    rec = r.json()
+    assert rec["id"].startswith("rec")
+    assert rec["fields"]["Name"] == "Ada"
+    assert rec["createdTime"].endswith("Z")
+    rid = rec["id"]
+
+    # Get one.
+    r = client.get(f"/v0/app1/Contacts/{rid}", headers=_agent_hdrs())
+    assert r.status_code == 200
+    assert r.json()["fields"]["Status"] == "Lead"
+
+    # PATCH merges — Name preserved, Status updated.
+    r = client.patch(f"/v0/app1/Contacts/{rid}",
+                     json={"fields": {"Status": "Customer"}}, headers=_agent_hdrs())
+    assert r.status_code == 200
+    body = r.json()["fields"]
+    assert body["Status"] == "Customer" and body["Name"] == "Ada"
+
+    # PUT replaces the whole fields object.
+    r = client.put(f"/v0/app1/Contacts/{rid}",
+                   json={"fields": {"Name": "Ada L."}}, headers=_agent_hdrs())
+    assert r.status_code == 200
+    assert "Status" not in r.json()["fields"]
+
+    # List + meta.
+    r = client.get("/v0/app1/Contacts", headers=_agent_hdrs())
+    assert r.status_code == 200
+    assert len(r.json()["records"]) == 1
+    r = client.get("/v0/meta/tables", headers=_agent_hdrs())
+    assert {"name": "Contacts", "record_count": 1} in r.json()["tables"]
+
+    # Delete.
+    r = client.delete(f"/v0/app1/Contacts/{rid}", headers=_agent_hdrs())
+    assert r.status_code == 200 and r.json()["deleted"] is True
+    r = client.get(f"/v0/app1/Contacts/{rid}", headers=_agent_hdrs())
+    assert r.status_code == 404
+
+
+def test_records_batch_create(client):
+    _enable_agent()
+    r = client.post("/v0/app1/Films",
+                    json={"records": [{"fields": {"Title": "A"}}, {"fields": {"Title": "B"}}]},
+                    headers=_agent_hdrs())
+    assert r.status_code == 200
+    recs = r.json()["records"]
+    assert len(recs) == 2
+    assert {x["fields"]["Title"] for x in recs} == {"A", "B"}

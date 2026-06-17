@@ -83,6 +83,16 @@ See `api.py` for full route list. Highlights:
 | POST   | `/users/{id}/follow` | Follow another user |
 | POST   | `/users/{id}/saved` | Save a movie |
 | POST   | `/users/{id}/reviews` | Submit a review |
+| *      | `/v0/{base}/{table}[/{id}]` | **Records API** — flexible Airtable-shaped store (token-gated) |
+
+### Records API (for Claude instances & data-entry tools)
+
+A schema-less, **Airtable-compatible** CRUD layer for arbitrary tables of JSON
+records — so a non-coder can do data entry through an Airtable-style tool while
+Claude instances read/write the same rows over one token. Full reference +
+client snippets: **[`AGENT_API.md`](AGENT_API.md)**. Gated by
+`Authorization: Bearer <AGENT_API_TOKEN>`; set `RECORDS_PUBLIC=true` to open it
+(staging sandbox).
 
 Auth is **stubbed** today — `/auth/login` accepts any `id_token` shaped like
 `sub|name|email` and returns a deterministic session token. See "Production gaps"
@@ -93,20 +103,30 @@ below.
 Netlify Functions don't run Python servers, so the backend lives elsewhere.
 The frontend (on Netlify) calls it via `VITE_API_BASE_URL`.
 
-### Recommended: Render (free tier)
+### Recommended: Render Blueprint (one-click, two environments)
+
+The repo root [`render.yaml`](../../render.yaml) is a Render Blueprint that
+provisions **both** environments plus their databases automatically:
+
+| Service | Env | Records API | Database |
+|---------|-----|-------------|----------|
+| `rated-api` | **prod** | auth-gated (`AGENT_API_TOKEN` required) | `rated-db` (Postgres) |
+| `rated-api-staging` | **staging** | public (`RECORDS_PUBLIC=true`) — practice here | `rated-db-staging` |
 
 1. Push this repo to GitHub.
-2. In Render → New → Web Service → connect this repo.
-3. Set:
-   - **Root Directory**: `build/backend`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn api:app --host 0.0.0.0 --port $PORT`
-   - **Environment**: copy keys from `.env.example`
-4. After deploy, Render gives you a URL like `https://rated-api.onrender.com`.
-5. In Netlify → Site settings → Environment variables, set
+2. Render → **New → Blueprint** → connect this repo → Apply. It reads
+   `render.yaml` and creates both services + both Postgres DBs.
+3. After deploy, grab the **prod** `AGENT_API_TOKEN` from
+   `rated-api` → Environment tab (Render generated it). That's the token Claude
+   instances / Airtable clients use. Staging needs no token.
+4. URLs look like `https://rated-api.onrender.com` /
+   `https://rated-api-staging.onrender.com`.
+5. In Netlify → Environment variables, set
    `VITE_API_BASE_URL = https://rated-api.onrender.com` and redeploy the frontend.
 
-Alternative hosts that work the same way: Railway, Fly.io, Heroku.
+Manual single-service setup still works (Root Directory `build/backend`, build
+`pip install -r requirements.txt`, start `uvicorn api:app --host 0.0.0.0 --port $PORT`).
+Alternative hosts: Railway, Fly.io, Heroku.
 
 ### Hooking up Netlify DB (Neon Postgres)
 

@@ -18,15 +18,15 @@ to wipe back to seeded fixtures.
 """
 
 import os
+import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Optional
 
 import structlog
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -63,6 +63,7 @@ TAGS = [
     {"name": "Feed",      "description": "Activity from followed users."},
     {"name": "TMDB",      "description": "Cached proxy to The Movie Database. Frontend should call these instead of api.themoviedb.org so the API key stays server-side."},
     {"name": "Notifications", "description": "In-app notifications. Auto-created on follow today."},
+    {"name": "Records",   "description": "Flexible, Airtable-shaped data store. Token-gated (Authorization: Bearer <AGENT_API_TOKEN>) so Claude instances and Airtable-compatible data-entry tools can read/write arbitrary tables of JSON records without code changes."},
 ]
 
 
@@ -212,6 +213,51 @@ def require_self(
     if user.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not allowed")
     return user
+
+
+# ─── Agent / service-token auth ───────────────────────────────────────────────
+# Distinct from the per-user session tokens above: AGENT_API_TOKEN is a static
+# secret (or comma-separated list of secrets) that grants machine clients —
+# Claude instances, an Airtable-compatible data-entry tool, n8n, etc. — access
+# to the flexible Records API. Modeled on reflight's bearer-token gateway:
+# present `Authorization: Bearer <token>` and the request is let through; this
+# is exactly the header Airtable's own clients send their PAT in, so a
+# pyairtable/airtable.js client pointed at this host with this token Just Works.
+
+def _agent_tokens() -> set[str]:
+    raw = os.environ.get("AGENT_API_TOKEN", "").strip()
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
+
+def _records_public() -> bool:
+    """Staging/sandbox toggle. When RECORDS_PUBLIC is truthy the Records API is
+    open — no token required — so the deploy can be poked at freely while we
+    practice. Prod leaves this unset, so AGENT_API_TOKEN is enforced."""
+    return os.environ.get("RECORDS_PUBLIC", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def require_agent(
+    authorization: Optional[str] = Header(default=None),
+    session_token: str = "",
+) -> bool:
+    """FastAPI dependency gating the Records API.
+
+    - RECORDS_PUBLIC truthy → open (public staging). Always allowed.
+    - Otherwise: 503 when no token is configured (fail closed, not open),
+      401 when the presented token is missing or wrong. Constant-time compared.
+    """
+    if _records_public():
+        return True
+    tokens = _agent_tokens()
+    if not tokens:
+        raise HTTPException(
+            status_code=503,
+            detail="Records API is disabled — set AGENT_API_TOKEN (or RECORDS_PUBLIC for a sandbox).",
+        )
+    presented = _extract_token(authorization, session_token)
+    if not presented or not any(secrets.compare_digest(presented, t) for t in tokens):
+        raise HTTPException(status_code=401, detail="Invalid or missing API token")
+    return True
 
 
 # ─── Initial seed ─────────────────────────────────────────────────────────────
@@ -1139,6 +1185,138 @@ def add_feed_reply(
 def list_feed_replies(item_id: str, limit: int = 50, db: Session = Depends(get_db)):
     """Public — anyone can read replies. Posting still requires auth."""
     return {"replies": app_instance.feed_reply_service.list_for_item(db, item_id, limit=limit)}
+
+
+# ─── Records (flexible Airtable-compatible store) ─────────────────────────────
+# Token-gated CRUD over arbitrary tables of JSON records. Path shape mirrors
+# Airtable's REST API: /v0/{baseId}/{tableName}[/{recordId}]. We run a single
+# logical base, so {base} is accepted and ignored — point any Airtable client
+# (pyairtable, airtable.js, n8n, Zapier) at this host with AGENT_API_TOKEN as
+# the PAT and the existing client code works unchanged. A non-coder does data
+# entry through such a tool; Claude instances hit the same endpoints to read
+# and write. No migration needed to add a table or a field — just write to it.
+
+
+@app.get("/v0/meta/tables", tags=["Records"])
+def list_record_tables(_: bool = Depends(require_agent), db: Session = Depends(get_db)):
+    """Discover which tables exist and how many records each holds. Loosely
+    analogous to Airtable's metadata API."""
+    return {"tables": app_instance.record_service.list_tables(db)}
+
+
+@app.get("/v0/{base}/{table}", tags=["Records"])
+def list_records(
+    base: str,
+    table: str,
+    pageSize: int = 100,        # noqa: N803 — Airtable uses camelCase query params
+    offset: int = 0,
+    _: bool = Depends(require_agent),
+    db: Session = Depends(get_db),
+):
+    """List records in {table}, newest first. Returns Airtable's envelope:
+    {"records": [...]} plus an opaque "offset" cursor when more rows remain."""
+    lim, off = _clamp_pagination(pageSize, offset, default=100)
+    rows = app_instance.record_service.list_records(db, table, limit=lim, offset=off)
+    total = app_instance.record_service.count(db, table)
+    out: dict[str, Any] = {"records": [r.to_airtable() for r in rows]}
+    if off + len(rows) < total:
+        out["offset"] = str(off + len(rows))
+    return out
+
+
+@app.post("/v0/{base}/{table}", tags=["Records"])
+def create_records(
+    base: str,
+    table: str,
+    body: dict = Body(...),
+    _: bool = Depends(require_agent),
+    db: Session = Depends(get_db),
+):
+    """Create one or more records. Two accepted shapes, both Airtable-native:
+      single: {"fields": {...}}              → returns the single record
+      batch:  {"records": [{"fields": {...}}]} → returns {"records": [...]}
+    """
+    try:
+        if isinstance(body.get("records"), list):
+            fields_list = [(item or {}).get("fields", {}) or {} for item in body["records"]]
+            rows = app_instance.record_service.create_records(db, table, fields_list)
+            return {"records": [r.to_airtable() for r in rows]}
+        if "fields" in body:
+            rows = app_instance.record_service.create_records(db, table, [body["fields"] or {}])
+            return rows[0].to_airtable()
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    raise HTTPException(status_code=422, detail="Body must contain 'fields' or 'records'")
+
+
+@app.get("/v0/{base}/{table}/{record_id}", tags=["Records"])
+def get_record(
+    base: str,
+    table: str,
+    record_id: str,
+    _: bool = Depends(require_agent),
+    db: Session = Depends(get_db),
+):
+    row = app_instance.record_service.get_record(db, table, record_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Record {record_id} not found in {table}")
+    return row.to_airtable()
+
+
+def _update_record_impl(table: str, record_id: str, body: dict, replace: bool, db: Session):
+    fields = body.get("fields")
+    if fields is None:
+        raise HTTPException(status_code=422, detail="Body must contain a 'fields' object")
+    try:
+        row = app_instance.record_service.update_record(
+            db, table, record_id, fields, replace=replace,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Record {record_id} not found in {table}")
+    return row.to_airtable()
+
+
+@app.patch("/v0/{base}/{table}/{record_id}", tags=["Records"])
+def patch_record(
+    base: str,
+    table: str,
+    record_id: str,
+    body: dict = Body(...),
+    _: bool = Depends(require_agent),
+    db: Session = Depends(get_db),
+):
+    """Merge the given fields into the record (Airtable PATCH semantics —
+    unspecified fields are left untouched)."""
+    return _update_record_impl(table, record_id, body, replace=False, db=db)
+
+
+@app.put("/v0/{base}/{table}/{record_id}", tags=["Records"])
+def put_record(
+    base: str,
+    table: str,
+    record_id: str,
+    body: dict = Body(...),
+    _: bool = Depends(require_agent),
+    db: Session = Depends(get_db),
+):
+    """Replace the record's entire fields object (Airtable PUT semantics —
+    fields absent from the body are cleared)."""
+    return _update_record_impl(table, record_id, body, replace=True, db=db)
+
+
+@app.delete("/v0/{base}/{table}/{record_id}", tags=["Records"])
+def delete_record(
+    base: str,
+    table: str,
+    record_id: str,
+    _: bool = Depends(require_agent),
+    db: Session = Depends(get_db),
+):
+    if not app_instance.record_service.delete_record(db, table, record_id):
+        raise HTTPException(status_code=404, detail=f"Record {record_id} not found in {table}")
+    return {"deleted": True, "id": record_id}
 
 
 @app.delete("/users/{user_id}/notifications/{notification_id}", tags=["Notifications"])

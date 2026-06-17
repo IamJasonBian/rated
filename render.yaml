@@ -1,45 +1,85 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
-# When you connect the repo to Render and import as a Blueprint, this file
-# provisions the service automatically (no manual dashboard form-filling).
+# Importing this repo as a Blueprint provisions BOTH environments below:
+#
+#   rated-api          PROD     Records API auth-gated (AGENT_API_TOKEN required)
+#   rated-api-staging  STAGING  Records API public (RECORDS_PUBLIC=true) to practice
+#
+# Each has its own managed Postgres so staging experiments never touch prod data.
+# Both auto-deploy from `main`; promote by merging. (To give staging its own
+# branch later, set `branch: staging` on the staging service.)
+
+databases:
+  - name: rated-db
+    plan: free            # free Postgres expires ~30 days; bump to keep it
+    region: oregon
+  - name: rated-db-staging
+    plan: free
+    region: oregon
 
 services:
+  # ─── PROD — auth-gated ──────────────────────────────────────────────────────
   - type: web
     name: rated-api
     runtime: python
     rootDir: build/backend
-    plan: free                # 0.1 CPU / 512 MB RAM, sleeps after 15min idle
+    plan: free            # 0.1 CPU / 512 MB RAM, sleeps after 15min idle
     region: oregon
-    branch: main              # auto-deploy on push to main
-    healthCheckPath: /healthz # the endpoint we just added; Render polls this
+    branch: main
+    healthCheckPath: /healthz
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head   # idempotent schema upgrade
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      # Pin Python so prod matches a runtime with prebuilt wheels (psycopg etc.).
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rated-db
+          property: connectionString
+      # Machine clients (Claude instances, Airtable-compatible tools) auth the
+      # Records API with `Authorization: Bearer <this>`. Render generates a
+      # strong random value on first deploy — read it from the dashboard
+      # (Environment tab). Comma-separate to issue multiple tokens.
+      - key: AGENT_API_TOKEN
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: https://silver-salamander-08daf4.netlify.app
+      - key: SESSION_TTL_SECONDS
+        value: "2592000"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: TMDB_API_KEY
+        sync: false
 
-    # Pre-deploy: install deps, then bring the schema up to head before
-    # the new code starts serving. Idempotent — re-running upgrade head
-    # on an already-current DB is a no-op.
+  # ─── STAGING — public sandbox ──────────────────────────────────────────────
+  - type: web
+    name: rated-api-staging
+    runtime: python
+    rootDir: build/backend
+    plan: free
+    region: oregon
+    branch: main
+    healthCheckPath: /healthz
     buildCommand: pip install -r requirements.txt
     preDeployCommand: alembic upgrade head
     startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
-
     envVars:
-      # Allow the Netlify production URL through CORS. Add more comma-
-      # separated origins later when you have a custom domain.
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rated-db-staging
+          property: connectionString
+      # Open the Records API — no token needed. This is what makes staging the
+      # practice environment. Do NOT set this on prod.
+      - key: RECORDS_PUBLIC
+        value: "true"
       - key: ALLOWED_ORIGINS
         value: https://silver-salamander-08daf4.netlify.app
-
-      # Sessions live for 30 days unless you override.
       - key: SESSION_TTL_SECONDS
         value: "2592000"
-
-      # Real Google OAuth verification. Leave blank to keep the
-      # "sub|name|email" stub format (fine for demos). Set this only when
-      # the frontend is also wired to send a real Google id_token.
       - key: GOOGLE_CLIENT_ID
-        sync: false           # set in Render dashboard → Environment
-
-      # Storage. Default = SQLite in the container, which RESETS every time
-      # Render rebuilds on free tier (data is ephemeral). For real
-      # persistence, uncomment + set a Postgres URL below — Neon (free
-      # tier) or Netlify DB both work; format:
-      #   postgresql+psycopg://user:pass@host:5432/dbname
-      # Then add `psycopg[binary]==3.x` to backend/requirements.txt.
-      - key: DATABASE_URL
-        sync: false           # set in Render dashboard → Environment
+        sync: false
+      - key: TMDB_API_KEY
+        sync: false
