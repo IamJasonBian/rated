@@ -64,10 +64,11 @@ async def fetch(path: str, *, params: Optional[dict] = None,
         if cached and cached[1] > time.time():
             return cached[0]
 
-        merged_params = dict(params or {})
-        merged_params["api_key"] = _api_key()
+        # TMDB v4 auth: the read access token goes in an Authorization: Bearer
+        # header (not a ?api_key= query param, which is v3-only).
+        headers = {"Authorization": f"Bearer {_api_key()}"}
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(f"{TMDB_API_BASE}{path}", params=merged_params)
+            r = await client.get(f"{TMDB_API_BASE}{path}", params=dict(params or {}), headers=headers)
             r.raise_for_status()
             data = r.json()
 
