@@ -1,0 +1,61 @@
+name: Rated
+options:
+  bundleIdPrefix: com.iamjasonbian
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: 6R36WQ2LGH
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Rated:
+    type: application
+    platform: iOS
+    sources:
+      - path: Rated
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.iamjasonbian.rated
+        INFOPLIST_FILE: Rated/Resources/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+      configs:
+        Debug:
+          RATED_API_BASE: "http://localhost:8010"
+        Release:
+          RATED_API_BASE: "https://rated-1--stephisapenguin.replit.app"
+  RatedTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [RatedTests]
+    dependencies:
+      - target: Rated
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.iamjasonbian.rated.tests
+  RatedUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [RatedUITests]
+    dependencies:
+      - target: Rated
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.iamjasonbian.rated.uitests
+        TEST_TARGET_NAME: Rated
+schemes:
+  Rated:
+    build:
+      targets:
+        Rated: all
+        RatedTests: [test]
+        RatedUITests: [test]
+    test:
+      targets: [RatedTests, RatedUITests]

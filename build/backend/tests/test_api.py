@@ -1304,3 +1304,44 @@ def test_presigned_url_dedicated_signing_key(client):
         assert r.status_code == 200
     finally:
         _os.environ.pop("RECORDS_SIGNING_KEY", None)
+
+
+def test_ticket_cta_requires_followee_overlap(client):
+    me, hdrs = _authed_login(client)
+    cine = client.get("/users/by-username/cinephile99").json()
+
+    # Neither rated by me nor anyone I follow → hidden.
+    body = client.get(f"/users/{me}/movies/m-002/tickets").json()
+    assert body["show"] is False and body["co_raters"] == []
+    assert body["url"].startswith("https://www.fandango.com/search?q=Parasite")
+    assert body["affiliate"] is False
+
+    client.post(f"/users/{me}/rankings", json={"movie_id": "m-002", "score": 9}, headers=hdrs)
+    assert client.get(f"/users/{me}/movies/m-002/tickets").json()["show"] is False
+
+    client.post(f"/users/{me}/follow", json={"followee_id": cine["user_id"]}, headers=hdrs)
+    body = client.get(f"/users/{me}/movies/m-002/tickets").json()
+    assert body["show"] is True
+    assert [c["username"] for c in body["co_raters"]] == ["cinephile99"]
+    assert body["co_raters"][0]["score"] == 10
+
+    # Followee hasn't rated RRR → still hidden even though I have.
+    client.post(f"/users/{me}/rankings", json={"movie_id": "m-005", "score": 7}, headers=hdrs)
+    assert client.get(f"/users/{me}/movies/m-005/tickets").json()["show"] is False
+
+
+def test_ticket_cta_affiliate_wrapping(client, monkeypatch):
+    me = _login(client)
+    monkeypatch.setenv("TICKETS_AFFILIATE_TEMPLATE",
+                       "https://www.anrdoezrs.net/click-1-2?url={url}")
+    body = client.get(f"/users/{me}/movies/m-003/tickets").json()
+    assert body["affiliate"] is True
+    assert body["url"] == (
+        "https://www.anrdoezrs.net/click-1-2?url="
+        "https%3A%2F%2Fwww.fandango.com%2Fsearch%3Fq%3DThe%2BDark%2BKnight%26mode%3Dgeneral"
+    )
+
+
+def test_ticket_cta_unknown_movie(client):
+    me = _login(client)
+    assert client.get(f"/users/{me}/movies/nope/tickets").status_code == 404

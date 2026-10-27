@@ -42,6 +42,7 @@ from db import get_db, init_db, SessionLocal
 from logging_config import configure_logging, get_logger, init_sentry
 from models import FollowRow, MovieRow, RankingRow, ReviewRow, UserRow
 from rated_backend import App, Movie
+import tickets
 import tmdb
 
 # Configure logging + Sentry as early as possible — before FastAPI imports
@@ -780,6 +781,51 @@ def get_user_rankings(user_id: str, limit: int = 50, offset: int = 0,
     return [r.to_dict() for r in app_instance.ranking_service.user_rankings(
         db, user_id, limit=lim, offset=off,
     )]
+
+
+@app.get("/users/{user_id}/movies/{movie_id}/tickets", tags=["Tickets"])
+def get_ticket_cta(user_id: str, movie_id: str, db: Session = Depends(get_db)):
+    """"Buy tickets" CTA for a movie, shown once the viewer and at least one
+    person they follow have both rated it. `co_raters` are those followees,
+    highest score first; `url` is the (affiliate-wrapped when configured)
+    Fandango link. The frontend renders the button only when `show` is true."""
+    movie = db.get(MovieRow, movie_id)
+    if not movie:
+        raise HTTPException(status_code=404, detail=f"Movie {movie_id} not found")
+    viewer_rated = db.execute(
+        select(RankingRow.id).where(
+            RankingRow.user_id == user_id, RankingRow.movie_id == movie_id,
+        )
+    ).first() is not None
+    followees = (
+        select(FollowRow.followee_id)
+        .where(FollowRow.follower_id == user_id, FollowRow.state == "approved")
+    )
+    rows = db.execute(
+        select(RankingRow)
+        .where(RankingRow.movie_id == movie_id, RankingRow.user_id.in_(followees))
+        .order_by(RankingRow.score.desc(), RankingRow.ranked_at.desc())
+        .limit(10)
+    ).scalars()
+    co_raters = [
+        {
+            "user_id":    r.user.user_id,
+            "username":   r.user.username,
+            "name":       r.user.name,
+            "avatar_url": r.user.avatar_url,
+            "score":      r.score,
+        }
+        for r in rows
+    ]
+    return {
+        "movie_id":     movie_id,
+        "title":        movie.title,
+        "show":         viewer_rated and bool(co_raters),
+        "viewer_rated": viewer_rated,
+        "co_raters":    co_raters,
+        "label":        "Buy tickets",
+        **tickets.ticket_link(movie.title),
+    }
 
 
 @app.post("/users/{user_id}/pairwise", tags=["Rankings"])
