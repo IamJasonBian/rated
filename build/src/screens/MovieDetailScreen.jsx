@@ -9,6 +9,7 @@ import { ShareSheet } from "../components/ShareSheet";
 import { Skeleton } from "../components/Skeleton";
 import { TapTarget } from "../components/TapTarget";
 import { TrailerModal } from "../components/TrailerModal";
+import { API } from "../lib/api";
 import { haptic } from "../lib/haptic";
 import { useEdgeSwipeBack } from "../lib/hooks";
 import { USER_PROFILES } from "../lib/mockData";
@@ -21,7 +22,7 @@ export const MovieDetailScreen = ({
   movie, onBack, onRank, isUpcoming,
   watchlist, onToggleWatchlist,
   followingHandles = new Set(), onSelectUser, onSubmitReview,
-  savedMovies = new Set(), toggleSavedMovie, showToast,
+  savedMovies = new Set(), toggleSavedMovie, showToast, userId,
 }) => {
   const [loaded, setLoaded] = useState(false);
   const [showReview, setShowReview] = useState(false);
@@ -58,6 +59,17 @@ export const MovieDetailScreen = ({
     }
     return () => { cancelled = true; };
   }, [movie?.id, movie?.tmdb_id]);
+
+  // "Buy tickets" CTA — backend decides visibility (you + someone you follow
+  // both rated it) and hands back the affiliate-wrapped Fandango link.
+  const [ticketCta, setTicketCta] = useState(null);
+  useEffect(() => {
+    setTicketCta(null);
+    if (!movie || !userId || isUpcoming) return;
+    let cancelled = false;
+    API.ticketCta(userId, movie.id).then((cta) => { if (!cancelled) setTicketCta(cta); });
+    return () => { cancelled = true; };
+  }, [movie?.id, userId, isUpcoming]);
 
   const m = enrichedMovie || movie;
   const saved = movie ? savedMovies.has(movie.id) : false;
@@ -196,6 +208,17 @@ export const MovieDetailScreen = ({
             </div>
             <div style={{ flex: 1 }} onClick={() => setShowReview(true)}><Btn full small>✎ REVIEW</Btn></div>
           </div>
+        )}
+        {ticketCta?.show && (
+          <a href={ticketCta.url} target="_blank" rel="noopener noreferrer sponsored" data-testid="buy-tickets"
+            onClick={() => haptic("medium")}
+            style={{ display: "block", textDecoration: "none", background: W.goldDim, border: `1px solid ${W.gold}`, borderRadius: 12, padding: "9px 14px", textAlign: "center", fontFamily: "monospace" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: W.gold }}>🎟 {ticketCta.label.toUpperCase()}</div>
+            <div style={{ fontSize: 8, color: W.dim, marginTop: 2 }}>
+              You and {ticketCta.co_raters.map((c) => `@${c.username || c.name}`).slice(0, 2).join(", ")}
+              {ticketCta.co_raters.length > 2 ? ` +${ticketCta.co_raters.length - 2}` : ""} both rated this
+            </div>
+          </a>
         )}
         {m.cast?.length > 0 && m.cast[0].name !== "TBA" && <>
           <div style={{ fontSize: 10, fontWeight: 700, color: W.dim, fontFamily: "monospace", letterSpacing: 1, marginTop: 4 }}>CAST</div>
