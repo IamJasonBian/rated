@@ -7,34 +7,33 @@ struct LoginView: View {
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
-            VStack(spacing: 8) {
-                Text("RATED").mono(46, .black).tracking(-2).foregroundStyle(W.accent)
-                    .shadow(color: W.accent.opacity(0.35), radius: 24)
-                Text("YOUR TASTE. RANKED.").mono(10).tracking(3).foregroundStyle(W.dim)
-            }
-            .padding(.bottom, 44)
+            Text("Rated").font(.largeTitle.weight(.bold)).foregroundStyle(.white)
+                .padding(.bottom, 40)
             VStack(spacing: 10) {
-                loginButton(.apple, title: "Continue with Apple", icon: "applelogo", fg: .black, bg: .white)
-                loginButton(.google, title: "Continue with Google", icon: "g.circle.fill", fg: W.text, bg: W.card)
+                loginButton(.apple, title: "Continue with Apple", fg: .black, bg: .white)
+                loginButton(.google, title: "Continue with Google", fg: .white, bg: .black)
             }
-            Text("By continuing you agree to Rated's **Terms** & **Privacy**")
-                .mono(9).foregroundStyle(W.dim).multilineTextAlignment(.center).padding(.top, 28)
-            Spacer()
-            Text("Apple ID & Google only · Import watch history from 8 platforms")
-                .mono(9).foregroundStyle(W.dim).padding(.bottom, 12)
+            .padding(.bottom, 24)
         }
         .padding(.horizontal, 28)
+        .background {
+            ZStack {
+                LoopingVideoBackground(video: "login-loop", poster: "login-poster.jpg")
+                Color.black.opacity(0.3)
+            }
+            .ignoresSafeArea()
+        }
     }
 
-    private func loginButton(_ p: LoginProvider, title: String, icon: String, fg: Color, bg: Color) -> some View {
+    private func loginButton(_ p: LoginProvider, title: String, fg: Color, bg: Color) -> some View {
         Button {
             Haptics.medium()
             busy = p
             Task { await store.login(p); busy = nil }
         } label: {
             HStack(spacing: 10) {
-                if busy == p { ProgressView().tint(fg) } else { Image(systemName: icon).font(.system(size: 17, weight: .semibold)) }
-                Text(title).font(.system(size: 15, weight: .semibold))
+                if busy == p { ProgressView().tint(fg) }
+                Text(title).font(.headline)
             }
             .foregroundStyle(fg)
             .frame(maxWidth: .infinity, minHeight: 50)
@@ -59,6 +58,7 @@ struct UsernameView: View {
     @State private var claimError: String?
     @State private var confirmed = false
     @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var localErr: String? { Usernames.localError(value) }
     private var available: Bool { localErr == nil && serverAvailable == true && !checking && value.count >= 4 }
@@ -68,9 +68,8 @@ struct UsernameView: View {
         VStack(spacing: 0) {
             if confirmed {
                 VStack(spacing: 12) {
-                    T("🎬").font(.system(size: 52))
-                    Text("@\(value)").mono(24, .black).foregroundStyle(W.accent)
-                    Text("Welcome to RATED").mono(12).foregroundStyle(W.dim)
+                    Text("@\(value)").font(.title.weight(.bold)).foregroundStyle(W.accent)
+                    Text("Welcome to Rated").font(.subheadline).foregroundStyle(W.dim)
                 }
                 .transition(.scale.combined(with: .opacity))
             } else if step == 0 {
@@ -81,38 +80,29 @@ struct UsernameView: View {
         }
         .frame(maxHeight: .infinity)
         .padding(.horizontal, 28)
-        .animation(.snappy, value: step)
-        .animation(.spring, value: confirmed)
+        .animation(reduceMotion ? nil : .snappy, value: step)
+        .animation(reduceMotion ? nil : .spring, value: confirmed)
         .onAppear { focused = true; if name.isEmpty, !store.displayName.isEmpty, store.displayName != "Apple User", store.displayName != "Google User" { name = store.displayName } }
     }
 
     private var nameStep: some View {
         let valid = name.trimmingCharacters(in: .whitespaces).count >= 2 && Profanity.check(name) == nil
         return VStack(spacing: 14) {
-            Text("RATED").mono(28, .black).foregroundStyle(W.accent)
-            T("👋").font(.system(size: 26)).frame(width: 54, height: 54)
-                .background(Circle().fill(W.card)).overlay(Circle().stroke(W.border, lineWidth: 2))
-            Text("What's your name?").mono(16, .heavy).foregroundStyle(W.text)
-            Text("Signed in with \(store.provider == .apple ? "Apple" : "Google").\nThis is how you'll appear on your profile.")
-                .mono(10).foregroundStyle(W.dim).multilineTextAlignment(.center)
-            HStack {
-                Text("YOUR NAME").mono(10).foregroundStyle(W.dim)
-                Spacer()
-                Text("\(name.count) / 30").mono(9).foregroundStyle(name.count >= 27 ? W.accent : W.dim)
-            }
-            .padding(.top, 14)
+            Text("Rated").font(.title.weight(.bold)).foregroundStyle(W.text)
+            Text("What's your name?").font(.title3.weight(.semibold)).foregroundStyle(W.text)
             TextField("e.g. Stephanie", text: $name)
                 .focused($focused)
                 .submitLabel(.next)
                 .onSubmit { continueFromName() }
                 .onChange(of: name) { _, v in if v.count > 30 { name = String(v.prefix(30)) }; nameError = nil }
-                .mono(15).foregroundStyle(W.text)
+                .font(.body).foregroundStyle(W.text)
                 .card(radius: 12, stroke: nameError != nil || Profanity.check(name) != nil ? W.accent : W.border, padding: 14)
                 .accessibilityIdentifier("name-field")
-            Text(nameError.map { "✗ \($0)" } ?? (Profanity.check(name) != nil ? "✗ Name contains inappropriate language" : "Can be your real name or a nickname · changeable later"))
-                .mono(9).foregroundStyle(nameError != nil || Profanity.check(name) != nil ? W.accent : W.dim)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            RatedButton(title: "CONTINUE →", style: valid ? .accent : .outline) { continueFromName() }
+            if let e = nameError ?? (Profanity.check(name) != nil ? "Name contains inappropriate language" : nil) {
+                Text(e).font(.subheadline).foregroundStyle(W.accent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            RatedButton(title: "Continue", style: valid ? .accent : .outline) { continueFromName() }
                 .opacity(valid ? 1 : 0.5)
                 .accessibilityIdentifier("name-continue")
         }
@@ -120,30 +110,28 @@ struct UsernameView: View {
 
     private var usernameStep: some View {
         VStack(spacing: 12) {
-            Text("RATED").mono(28, .black).foregroundStyle(W.accent)
+            Text("Rated").font(.title.weight(.bold)).foregroundStyle(W.text)
             HStack(spacing: 6) {
-                Text("Hi,").mono(11).foregroundStyle(W.dim)
-                Text(name.trimmingCharacters(in: .whitespaces)).mono(11, .bold).foregroundStyle(W.text)
-                Button { step = 0 } label: { Image(systemName: "pencil").font(.system(size: 10)).foregroundStyle(W.dim) }
+                Text("Hi,").font(.subheadline).foregroundStyle(W.dim)
+                Text(name.trimmingCharacters(in: .whitespaces)).font(.subheadline.weight(.semibold)).foregroundStyle(W.text)
+                Button { step = 0 } label: { Text("Edit").font(.subheadline).foregroundStyle(W.accent) }
+                    .hitArea()
                     .accessibilityLabel("Edit name")
             }
             .padding(.horizontal, 12).padding(.vertical, 5)
             .background(Capsule().fill(W.card)).overlay(Capsule().stroke(W.border))
-            Text("Now pick a username").mono(16, .heavy).foregroundStyle(W.text)
-            Text("This is your unique @handle on RATED.").mono(10).foregroundStyle(W.dim)
+            Text("Now pick a username").font(.title3.weight(.semibold)).foregroundStyle(W.text)
             HStack(spacing: 4) {
-                Text("@").mono(14).foregroundStyle(W.dim)
+                Text("@").font(.subheadline).foregroundStyle(W.dim)
                 TextField("username", text: $value)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .focused($focused)
                     .submitLabel(.go)
                     .onSubmit { claim() }
-                    .mono(15).foregroundStyle(W.text)
+                    .font(.body).foregroundStyle(W.text)
                     .accessibilityIdentifier("username-field")
                 Group {
                     if checking { ProgressView().controlSize(.small) }
-                    else if available { Image(systemName: "checkmark").foregroundStyle(W.green) }
-                    else if errorMsg != nil && !value.isEmpty { Image(systemName: "xmark").foregroundStyle(W.accent) }
                 }
                 .frame(width: 20)
             }
@@ -151,27 +139,26 @@ struct UsernameView: View {
             .padding(.top, 8)
             .onChange(of: value) { _, raw in onChange(raw) }
             VStack(alignment: .leading, spacing: 4) {
-                Text("4–20 chars · lowercase letters, numbers, underscore only").mono(10).foregroundStyle(W.dim)
-                if let e = errorMsg, !checking, !value.isEmpty { Text("✗ \(e)").mono(10).foregroundStyle(W.accent) }
-                if available { Text("@\(value) is available ✓").mono(10).foregroundStyle(W.green) }
-                if let e = claimError { Text(e).mono(10).foregroundStyle(W.accent) }
+                if let e = errorMsg, !checking, !value.isEmpty { Text(e).font(.subheadline).foregroundStyle(W.accent) }
+                if available { Text("@\(value) is available").font(.subheadline).foregroundStyle(W.green) }
+                if let e = claimError { Text(e).font(.subheadline).foregroundStyle(W.accent) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if errorMsg == "Username already taken", value.count >= 4 {
                 VStack(alignment: .leading, spacing: 6) {
-                    SectionLabel(text: "TRY ONE OF THESE")
-                    HStack {
-                        ForEach(["\(value)_", "\(value)1", "\(value)42", "the_\(value)"].filter { !Usernames.taken.contains($0) && $0.count <= 20 }.prefix(4), id: \.self) { s in
+                    SectionLabel(text: "Try one of these")
+                    ScrollView(.horizontal, showsIndicators: false) { HStack {
+                        ForEach(["\(value)_", "\(value)1", "\(value)42", "the_\(value)"].filter { $0.count <= 20 }.prefix(4), id: \.self) { s in
                             Chip(label: "@\(s)", selected: false) { value = s }
                         }
-                    }
+                    } }
                 }
             }
-            RatedButton(title: "CLAIM @\(value.isEmpty ? "username" : value) →", style: available ? .accent : .outline) { claim() }
+            RatedButton(title: "Claim @\(value.isEmpty ? "username" : value)", style: available ? .accent : .outline) { claim() }
                 .opacity(available ? 1 : 0.5)
                 .padding(.top, 6)
                 .accessibilityIdentifier("username-claim")
-            Text("Your username is public · You can change it once every 30 days").mono(9).foregroundStyle(W.dim)
+            Text("Your username is public").font(.subheadline).foregroundStyle(W.dim)
         }
     }
 
@@ -196,7 +183,7 @@ struct UsernameView: View {
             guard value == clean else { return }
             let res = await APIClient.shared.checkUsername(clean)
             guard value == clean else { return }
-            serverAvailable = res ?? !Usernames.taken.contains(clean)
+            serverAvailable = res
             checking = false
         }
     }
@@ -208,7 +195,6 @@ struct UsernameView: View {
                 do { try await APIClient.shared.setUsername(value, token: s) }
                 catch { claimError = error.localizedDescription; return }
             }
-            Usernames.taken.insert(value)
             Haptics.success()
             confirmed = true
             try? await Task.sleep(for: .milliseconds(900))
@@ -231,18 +217,16 @@ struct OnboardingRankView: View {
         let ready = count >= target
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("STEP 1 OF 1 · WELCOME").mono(9, .bold).tracking(1.5).foregroundStyle(W.accent)
-                Text("Rank your first \(target) movies").mono(21, .black).foregroundStyle(W.text)
-                Text("Tap a movie you've seen — we'll ask you to compare it to others to figure out exactly where it ranks. The more you rank, the smarter your taste profile gets.")
-                    .mono(11).foregroundStyle(W.dim).lineSpacing(3)
+                Text("Rank your first \(target) movies").font(.title2.weight(.bold)).foregroundStyle(W.text)
+                Text("Tap a movie you've seen, then compare it with others to find where it ranks.")
+                    .font(.subheadline).foregroundStyle(W.dim).lineSpacing(3)
             }
             .padding(.horizontal, 22).padding(.top, 16)
             VStack(spacing: 6) {
                 HStack {
-                    Text(ready ? "✓ READY" : "\(count) / \(target) RANKED").mono(10, .bold).foregroundStyle(ready ? W.green : W.dim)
+                    Text(ready ? "READY" : "\(count) / \(target) RANKED").font(.subheadline.weight(.semibold)).foregroundStyle(ready ? W.green : W.dim)
                         .accessibilityIdentifier("onboarding-progress")
                     Spacer()
-                    if !ready { Text("\(target - count) more to go").mono(9).foregroundStyle(W.dim) }
                 }
                 ProgressView(value: min(1, Double(count) / Double(target)))
                     .tint(ready ? W.green : W.accent)
@@ -253,21 +237,21 @@ struct OnboardingRankView: View {
             ScrollView {
                 VStack(spacing: 10) {
                     TextField("Or search for a movie you've seen...", text: $query)
-                        .mono(12).foregroundStyle(W.text)
+                        .font(.body).foregroundStyle(W.text)
                         .card(radius: 12, padding: 11)
                         .submitLabel(.search)
                     if popular == nil && query.count < 2 { ProgressView("Loading popular films…").padding(40) }
-                    if query.count >= 2 && !searching && (results ?? []).isEmpty { Text("No results for \"\(query)\"").mono(10).foregroundStyle(W.dim).padding() }
+                    if popular?.isEmpty == true && query.count < 2 { EmptyStateView(title: "Couldn't load movies", subtitle: "Check your connection, or skip for now.") }
+                    if query.count >= 2 && !searching && (results ?? []).isEmpty { Text("No results for \"\(query)\"").font(.subheadline).foregroundStyle(W.dim).padding() }
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 10) {
                         ForEach(query.count >= 2 ? (results ?? []) : (popular ?? [])) { m in
                             let ranked = store.rankedIds.contains(m.id)
                             Button { store.startRank(m) } label: {
                                 VStack(alignment: .leading, spacing: 6) {
                                     PosterView(url: m.posterURL, title: m.title, height: 200)
-                                        .overlay(alignment: .topTrailing) { if ranked { BadgeView(text: "✓ RANKED", color: .green).padding(6) } }
-                                    Text(m.title).mono(11, .bold).foregroundStyle(W.text).lineLimit(2).frame(height: 30, alignment: .topLeading)
-                                    Text(m.releaseYear.map(String.init) ?? "").mono(9).foregroundStyle(W.dim)
-                                    Text(ranked ? "RANKED" : "⚡ RANK THIS").mono(10, .bold).foregroundStyle(.white)
+                                        .overlay(alignment: .topTrailing) { if ranked { BadgeView(text: "Ranked", color: .green).padding(6) } }
+                                    Text(m.title).font(.subheadline.weight(.semibold)).foregroundStyle(W.text).lineLimit(2).frame(minHeight: 42, alignment: .topLeading)
+                                    Text(ranked ? "Ranked" : "Rank This").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                                         .frame(maxWidth: .infinity).padding(.vertical, 6)
                                         .background(RoundedRectangle(cornerRadius: 8).fill(ranked ? W.green : W.accent))
                                 }
@@ -281,9 +265,10 @@ struct OnboardingRankView: View {
                 }
                 .padding(.horizontal, 22).padding(.vertical, 12)
             }
+            .scrollDismissesKeyboard(.interactively)
             HStack {
                 if ready {
-                    RatedButton(title: "✓ DONE — TAKE ME HOME") { Haptics.heavy(); store.finishOnboarding() }
+                    RatedButton(title: "Done — Take Me Home") { Haptics.heavy(); store.finishOnboarding() }
                         .accessibilityIdentifier("onboarding-done")
                 } else {
                     RatedButton(title: "Skip for now", style: .outline) { Haptics.light(); store.finishOnboarding() }
@@ -300,7 +285,7 @@ struct OnboardingRankView: View {
             searching = true
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
-            results = await Catalog.shared.search(query)
+            results = await Catalog.shared.search(query) ?? []
             searching = false
         }
     }

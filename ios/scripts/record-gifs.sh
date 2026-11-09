@@ -26,8 +26,7 @@ record() {
   kill -INT "$rec"; wait "$rec" || true
   fi
   # Trim to the app: the springboard (launch + teardown) averages ~158 luma,
-  # the app's dark UI ~30-60. Keep from the first 1s run under 100 to the last frame under 100 (a brief
-  # light-theme toggle mid-flow stays inside the window).
+  # the app's dark UI ~30-60. Keep from the first 1s run under 100 to the last frame under 100.
   local window start end
   window=$(ffprobe -v error -f lavfi -i "movie=$mov,fps=4,signalstats" \
     -show_entries frame=pts_time:frame_tags=lavfi.signalstats.YAVG -of csv=p=0 \
@@ -42,7 +41,6 @@ record() {
 }
 
 record test01_OnboardingAndPairwiseRanking ios-onboarding-rank
-record test02_FeedLikeReplyAndDetail ios-feed-review
-record test03_ProfileReorderAndSettings ios-profile-settings
-record test04_UpcomingSearchLeaderboard ios-browse
-record test05_BuyTicketsCTA ios-tickets
+record test02_DetailSaveAndReview ios-detail-review
+record test03_ProfileRankingsAndSettings ios-profile-settings
+record test04_SearchAndLeaderboard ios-browse

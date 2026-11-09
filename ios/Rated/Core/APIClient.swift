@@ -1,7 +1,7 @@
 import Foundation
 
 // Port of build/src/lib/api.js. Bearer token goes in the Authorization header;
-// network/non-2xx failures return nil (callers fall back to mock data) except
+// network/non-2xx failures return nil (callers show an honest empty state) except
 // 401/403, which surface as `APIError.unauthorized` so auth flows can react.
 
 enum APIError: Error, LocalizedError {
@@ -21,11 +21,7 @@ struct APIUser: Decodable {
     var user_id: String
     var name: String?
     var email: String?
-    var avatar_url: String?
     var username: String?
-    var is_private: Bool?
-    var follower_count: Int?
-    var following_count: Int?
 }
 
 struct LoginResponse: Decodable {
@@ -50,13 +46,6 @@ struct APIRanking: Decodable {
     var ranked_at: Double?
 }
 
-struct APIFeedRow: Decodable {
-    var user: APIUser?
-    var movie: APIMovieRef
-    var score: Double?
-    var ranked_at: Double?
-}
-
 struct APIReview: Decodable {
     var movie_id: String
     var rating: Int
@@ -65,31 +54,9 @@ struct APIReview: Decodable {
     var edited: Bool?
 }
 
-struct APINotification: Decodable {
-    var id: String
-    var type: String
-    var read: Bool
-    var body: String?
-    var created_at: Double?
-    var actor: APIUser?
-}
-
-struct APINotificationList: Decodable { var items: [APINotification] }
 struct APIUsernameCheck: Decodable { var available: Bool }
-struct APIFeedLikes: Decodable { var item_ids: [String] }
-struct APIReplyRow: Decodable { var user: APIUser?; var body: String; var created_at: Double? }
-struct APIReplies: Decodable { var replies: [APIReplyRow] }
+struct APITopMovie: Decodable { var movie: APIMovieRef; var avg_score: Double }
 struct Empty: Decodable {}
-
-struct APICoRater: Decodable, Hashable { var username: String?; var name: String?; var avatar_url: String?; var score: Double? }
-struct APITickets: Decodable {
-    var show: Bool
-    var co_raters: [APICoRater]?
-    var label: String?
-    var url: String?
-    var affiliate: Bool?
-    var provider: String?
-}
 
 struct MovieMeta: Encodable {
     var title: String
@@ -185,7 +152,7 @@ final class APIClient: @unchecked Sendable {
         _ = try await send("POST", "/auth/username", body: Body(username: u), token: token)
     }
 
-    // MARK: Rankings / feed
+    // MARK: Rankings
 
     func rankings(_ uid: String, token: String) async -> [APIRanking]? {
         await call("GET", "/users/\(uid)/rankings", token: token)
@@ -201,46 +168,25 @@ final class APIClient: @unchecked Sendable {
         _ = await call("POST", "/users/\(uid)/pairwise", body: Body(winner_movie_id: winner, loser_movie_id: loser), token: token, as: Empty.self)
     }
 
-    func feed(_ uid: String, token: String) async -> [APIFeedRow]? {
-        await call("GET", "/users/\(uid)/feed", token: token)
+    // MARK: Catalog
+
+    func movies(q: String? = nil) async -> [APIMovieRef]? {
+        let enc = q.map { "?q=" + ($0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0) } ?? ""
+        return await call("GET", "/movies\(enc)")
     }
 
-    // MARK: Social
+    func movie(_ id: String) async -> APIMovieRef? { await call("GET", "/movies/\(esc(id))") }
 
-    func userByUsername(_ handle: String, token: String?) async -> APIUser? {
-        let clean = handle.hasPrefix("@") ? String(handle.dropFirst()) : handle
-        return await call("GET", "/users/by-username/\(esc(clean))", token: token)
-    }
-
-    func follow(_ uid: String, followee: String, token: String) async -> Bool {
-        struct Body: Encodable { var followee_id: String }
-        return await call("POST", "/users/\(uid)/follow", body: Body(followee_id: followee), token: token, as: Empty.self) != nil
-    }
-
-    func unfollow(_ uid: String, followee: String, token: String) async -> Bool {
-        await call("DELETE", "/users/\(uid)/follow/\(followee)", token: token, as: Empty.self) != nil
-    }
-
-    func searchUsers(_ q: String, limit: Int = 20) async -> [APIUser]? {
-        let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q
-        return await call("GET", "/users?q=\(enc)&limit=\(limit)")
-    }
+    func topMovies(n: Int = 20) async -> [APITopMovie]? { await call("GET", "/movies/top?n=\(n)") }
 
     // MARK: Saved / watchlist / reviews
 
     func saved(_ uid: String, token: String) async -> [String]? { await call("GET", "/users/\(uid)/saved", token: token) }
-    func watchlist(_ uid: String, token: String) async -> [String]? { await call("GET", "/users/\(uid)/watchlist", token: token) }
 
     func setSaved(_ uid: String, movie: Movie, on: Bool, token: String) async -> Bool {
         struct Body: Encodable { var movie_id: String; var movie_meta: MovieMeta }
         if on { return await call("POST", "/users/\(uid)/saved", body: Body(movie_id: movie.id, movie_meta: MovieMeta(movie)), token: token, as: Empty.self) != nil }
         return await call("DELETE", "/users/\(uid)/saved/\(movie.id)", token: token, as: Empty.self) != nil
-    }
-
-    func setWatchlist(_ uid: String, movieId: String, on: Bool, token: String) async -> Bool {
-        struct Body: Encodable { var movie_id: String }
-        if on { return await call("POST", "/users/\(uid)/watchlist", body: Body(movie_id: movieId), token: token, as: Empty.self) != nil }
-        return await call("DELETE", "/users/\(uid)/watchlist/\(movieId)", token: token, as: Empty.self) != nil
     }
 
     func reviews(_ uid: String, token: String) async -> [APIReview]? { await call("GET", "/users/\(uid)/reviews", token: token) }
@@ -262,42 +208,6 @@ final class APIClient: @unchecked Sendable {
 
     func deleteAccount(_ uid: String, token: String) async {
         _ = await call("DELETE", "/users/\(uid)", token: token, as: Empty.self)
-    }
-
-    // MARK: Notifications / reports / likes / replies
-
-    func notifications(_ uid: String) async -> [APINotification]? {
-        await call("GET", "/users/\(uid)/notifications", as: APINotificationList.self)?.items
-    }
-
-    func markAllNotificationsRead(_ uid: String) async { _ = await call("POST", "/users/\(uid)/notifications/mark-all-read", as: Empty.self) }
-    func markNotificationRead(_ uid: String, id: String) async { _ = await call("POST", "/users/\(uid)/notifications/\(id)/read", as: Empty.self) }
-    func deleteNotification(_ uid: String, id: String) async { _ = await call("DELETE", "/users/\(uid)/notifications/\(id)", as: Empty.self) }
-
-    func submitReport(_ uid: String, type: String, targetId: String, label: String, reason: ReportReason, token: String) async {
-        let body = ["target_type": type, "target_id": targetId, "target_label": label, "reason_key": reason.key, "reason_label": reason.label]
-        _ = await call("POST", "/users/\(uid)/reports", body: body, token: token, as: Empty.self)
-    }
-
-    func toggleFeedLike(_ uid: String, itemId: String, token: String) async {
-        _ = await call("POST", "/users/\(uid)/feed-likes/\(esc(itemId))", token: token, as: Empty.self)
-    }
-
-    func myFeedLikes(_ uid: String) async -> [String]? {
-        await call("GET", "/users/\(uid)/feed-likes", as: APIFeedLikes.self)?.item_ids
-    }
-
-    func postReply(_ uid: String, itemId: String, body: String, token: String) async {
-        _ = await call("POST", "/users/\(uid)/feed-replies/\(esc(itemId))", body: ["body": body], token: token, as: Empty.self)
-    }
-
-    func replies(_ itemId: String) async -> [APIReplyRow]? {
-        await call("GET", "/feed-items/\(esc(itemId))/replies", as: APIReplies.self)?.replies
-    }
-
-    /// Affiliate ticket CTA for a movie the user and someone they follow both rated.
-    func tickets(_ uid: String, movieId: String, token: String?) async -> APITickets? {
-        await call("GET", "/users/\(uid)/movies/\(esc(movieId))/tickets", token: token)
     }
 
     func ping() async -> Bool { await raw("/movies/top") != nil }

@@ -6,17 +6,15 @@ uses the same FastAPI backend.
 | Area | What's there |
 |---|---|
 | Auth | Apple/Google stub sign-in (`sub\|name\|email` dev tokens, same as web), two-step name → @handle with debounced availability check, Keychain-stored session, restore on launch |
-| Onboarding | Rank-your-first-5 tutorial with popular grid + TMDB search, progress, skip |
-| Ranking | Pairwise binary-search ranker with Elo updates, pairwise + final score synced to `/users/{id}/pairwise` and `/rankings`, weekly streak |
-| Home | Highlights carousel, Following/Everyone feed, likes, 280-char replies, follow, share, report/block, rank/save from the card, pull to refresh |
-| Movie detail | Backdrop/poster viewer, trailer (Safari sheet), stats, rank/save/review, cast, people-you-follow takes, **Buy tickets** CTA from `/users/{id}/movies/{movie_id}/tickets` |
-| Upcoming / Search / Board | Genre chips + watchlist; movie + user search with history, browse, find friends; Most Rated / Friends' Picks / Top Rated |
-| Profile | Streak, stats, rankings with native drag-reorder / re-rank / swipe-to-remove, saved + watchlist with swipe actions, reviews with edit/delete, followers/following sheets, share profile |
-| Notifications | All/Followers/Watchlist tabs, follow-request approve/decline, follow back, mark read |
-| Settings | Account (PhotosPicker + circular cropper, name/bio, 30-day username change, 2-step delete), privacy + blocked users, find friends (on-device SHA-256 contact hashing, share/email/SMS invite), notification toggles (weekly streak reminder via local notification), dark/light/system theme and text size, developer API-base override |
+| Onboarding | Rank-your-first-5 tutorial with popular grid + search, progress, skip |
+| Ranking | Pairwise binary-search ranker with Elo updates, pairwise + final score synced to `/users/{id}/pairwise` and `/rankings` |
+| Home | Popular-films grid (TMDB proxy when configured, else `/movies`) |
+| Movie detail | Backdrop/poster viewer, trailer, rating, rank/save/review, cast (rich fields need a backend TMDB key) |
+| Search / Board | Movie search with recent searches; community top list from `/movies/top` |
+| Profile | Rankings, saved films with swipe-to-remove, reviews with edit/delete |
+| Settings | Account (display name, username change, 2-step delete), About with developer API-base override |
 
-Optimistic writes with rollback + toast, an offline banner (NWPathMonitor), and mock-data
-fallbacks behave the same as on web. Emoji icons from the web UI render as SF Symbols
+Optimistic writes roll back with a toast on failure; an unreachable backend shows an honest empty/error state rather than fake data. Emoji icons from the web UI render as SF Symbols
 (`Components/Glyphs.swift`).
 
 ## Build and run
@@ -40,9 +38,9 @@ Release builds use the hosted API in `project.yml`.
 
 ```bash
 cd ios
-# Unit: Elo, bisection ranker, streaks, profanity/username rules, time formatting
+# Unit: Elo, bisection ranker, profanity/username rules, time formatting
 xcodebuild -scheme Rated -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test -only-testing:RatedTests
-# UI: five end-to-end flows against the running backend (test05 needs the tickets endpoint)
+# UI: five end-to-end flows against the running backend
 xcodebuild -scheme Rated -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test -only-testing:RatedUITests
 ```
 

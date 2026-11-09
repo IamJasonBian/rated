@@ -1,6 +1,6 @@
 import Foundation
 
-// Pure logic ported from build/src/lib/{elo,streak,profanity,time,moderation,usernames}.js.
+// Pure logic ported from build/src/lib/{elo,profanity,time,usernames}.js.
 // Kept free of UI/state so RatedTests can exercise it directly.
 
 enum Elo {
@@ -14,12 +14,6 @@ enum Elo {
     /// Elo → 1–10 backend score (1500 ≈ 5, ±20 per step), as in RankScreen.handleSave.
     static func score(fromElo elo: Int) -> Int {
         min(10, max(1, Int((Double(elo - 1400) / 20).rounded())))
-    }
-
-    /// 1–10 score derived from list position, as in App.jsx onRankComplete.
-    static func score(position: Int, total: Int) -> Int {
-        let frac = Double(position - 1) / Double(max(total - 1, 1))
-        return max(1, min(10, 10 - Int((frac * 9).rounded())))
     }
 }
 
@@ -80,42 +74,6 @@ struct RankSession {
     }
 }
 
-struct StreakInfo: Equatable {
-    enum Status { case active, atRisk, none }
-    var count: Int
-    var status: Status
-}
-
-/// Consecutive Monday-start weeks with ≥1 ranking (streak.js). A week with no
-/// rank yet stays "at risk" if last week counted.
-enum Streak {
-    static func mondayOfWeek(_ date: Date, calendar: Calendar = .current) -> Date {
-        let start = calendar.startOfDay(for: date)
-        let weekday = calendar.component(.weekday, from: start) // Sun=1 … Sat=7
-        let daysSinceMonday = (weekday + 5) % 7
-        return calendar.date(byAdding: .day, value: -daysSinceMonday, to: start)!
-    }
-
-    static func compute(_ history: [RankEvent], now: Date = .now, calendar: Calendar = .current) -> StreakInfo {
-        guard !history.isEmpty else { return .init(count: 0, status: .none) }
-        let weeks = Set(history.map { mondayOfWeek($0.ts, calendar: calendar) })
-        let thisWeek = mondayOfWeek(now, calendar: calendar)
-        let prev = { (d: Date) in calendar.date(byAdding: .day, value: -7, to: d)! }
-        var cursor: Date
-        let status: StreakInfo.Status
-        if weeks.contains(thisWeek) {
-            cursor = thisWeek; status = .active
-        } else if weeks.contains(prev(thisWeek)) {
-            cursor = prev(thisWeek); status = .atRisk
-        } else {
-            return .init(count: 0, status: .none)
-        }
-        var count = 0
-        while weeks.contains(cursor) { count += 1; cursor = prev(cursor) }
-        return .init(count: count, status: status)
-    }
-}
-
 /// Basic word-list profanity filter with leetspeak normalisation (profanity.js).
 enum Profanity {
     private static let words = [
@@ -144,21 +102,7 @@ enum Profanity {
     }
 }
 
-enum Moderation {
-    static let followLimitPerHour = 200
-    static let followWindow: TimeInterval = 60 * 60
-    static let usernameCooldown: TimeInterval = 30 * 24 * 60 * 60
-}
-
 enum Usernames {
-    /// Local cache of known-taken handles (usernames.js). The server is the
-    /// source of truth via /auth/username/check/{u}.
-    nonisolated(unsafe) static var taken: Set<String> = [
-        "jasonk", "maya", "josh", "lina", "carlos",
-        "cinephile99", "filmfreak", "reeltalks",
-        "admin", "rated", "movies", "film",
-    ]
-
     static func sanitize(_ raw: String) -> String {
         String(raw.lowercased().filter { ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "_" })
     }
@@ -170,7 +114,6 @@ enum Usernames {
         if v.count > 20 { return "Max 20 characters" }
         if sanitize(v) != v { return "Only lowercase letters, numbers, and _" }
         if Profanity.check(v) != nil { return "Username contains inappropriate language" }
-        if taken.contains(v) { return "Username already taken" }
         return nil
     }
 }
@@ -186,53 +129,10 @@ enum TimeFmt {
         f.dateFormat = diff < 365 * 86400 ? "MMM d" : "MMM d, yyyy"
         return f.string(from: date)
     }
-
-    /// Inverse of `relative` for short fixtures like "3h" / "just now".
-    static func parseRelative(_ s: String, now: Date = .now) -> Date {
-        let str = s.lowercased().trimmingCharacters(in: .whitespaces)
-        if str.contains("just") { return now.addingTimeInterval(-10) }
-        let digits = str.prefix(while: \.isNumber)
-        guard let n = Double(digits), let unit = str.dropFirst(digits.count).trimmingCharacters(in: .whitespaces).first else { return now }
-        let mult: Double = ["s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800][unit] ?? 60
-        return now.addingTimeInterval(-n * mult)
-    }
-
-    private static func parseISO(_ iso: String) -> Date? {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f.date(from: iso)
-    }
-
-    static func daysUntil(_ iso: String?, now: Date = .now) -> Int? {
-        guard let iso, let target = parseISO(iso) else { return nil }
-        let cal = Calendar.current
-        return cal.dateComponents([.day], from: cal.startOfDay(for: now), to: cal.startOfDay(for: target)).day
-    }
-
-    static func releaseDate(_ iso: String?) -> String {
-        guard let iso, let d = parseISO(iso) else { return "" }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US")
-        f.dateFormat = "MMM d, yyyy"
-        return f.string(from: d)
-    }
-
-    static func countdown(_ iso: String?) -> String {
-        guard let d = daysUntil(iso) else { return "" }
-        return d > 0 ? "\(d)d away" : d == 0 ? "TODAY" : "Released"
-    }
-
-    static func compact(_ n: Int) -> String {
-        n > 999 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
-    }
 }
 
 enum Medal {
     static func label(_ index: Int) -> String {
-        index < 3 ? ["🥇", "🥈", "🥉"][index] : "\(index + 1)"
+        "\(index + 1)"
     }
 }
-
-/// Stable small hash used to synthesise per-user mock content (UserProfileScreen).
-func charSum(_ s: String) -> Int { s.unicodeScalars.reduce(0) { $0 + Int($1.value) } }

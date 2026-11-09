@@ -9,7 +9,7 @@ enum W {
     static let card = dyn(light: 0xffffff, dark: 0x1a1a22)
     static let border = dyn(light: 0xe5e5ec, dark: 0x2c2c3a)
     static let text = dyn(light: 0x18181e, dark: 0xededf2)
-    static let dim = dyn(light: 0x6e6e82, dark: 0x6e6e82)
+    static let dim = dyn(light: 0x6e6e82, dark: 0x8b8b9e)
     static let accent = dyn(light: 0xe5252f, dark: 0xff3b3b)
     static let green = dyn(light: 0x059669, dark: 0x10b981)
     static let gold = dyn(light: 0xca8a04, dark: 0xeab308)
@@ -21,7 +21,6 @@ enum W {
     static var greenDim: Color { green.opacity(0.13) }
     static var goldDim: Color { gold.opacity(0.13) }
     static var blueDim: Color { blue.opacity(0.13) }
-    static var purpleDim: Color { purple.opacity(0.13) }
     static var orangeDim: Color { orange.opacity(0.13) }
 
     private static func dyn(light: UInt32, dark: UInt32) -> Color {
@@ -40,52 +39,12 @@ extension UIColor {
     }
 }
 
-// Text-size preference (Settings → Appearance). The web zooms the phone frame;
-// here every `.mono()` call multiplies by the environment scale.
-private struct FontScaleKey: EnvironmentKey {
-    static let defaultValue: CGFloat = 1.0
-}
-
-extension EnvironmentValues {
-    var fontScale: CGFloat {
-        get { self[FontScaleKey.self] }
-        set { self[FontScaleKey.self] = newValue }
-    }
-}
-
-private struct MonoFont: ViewModifier {
-    @Environment(\.fontScale) private var scale
-    let size: CGFloat
-    let weight: Font.Weight
-
-    func body(content: Content) -> some View {
-        content.font(.system(size: size * scale, weight: weight, design: .monospaced))
-    }
-}
-
 extension View {
-    /// The app's monospaced type ramp, scaled by the user's text-size setting.
-    func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> some View {
-        modifier(MonoFont(size: size, weight: weight))
-    }
-
     /// Rounded card surface used across feed rows, lists and panels.
     func card(radius: CGFloat = 14, fill: Color = W.card, stroke: Color = W.border, padding: CGFloat = 12) -> some View {
         self
             .padding(padding)
             .background(RoundedRectangle(cornerRadius: radius).fill(fill))
             .overlay(RoundedRectangle(cornerRadius: radius).stroke(stroke, lineWidth: 1))
-    }
-}
-
-enum ThemeMode: String, CaseIterable, Codable {
-    case dark, light, system
-
-    var colorScheme: ColorScheme? {
-        switch self {
-        case .dark: .dark
-        case .light: .light
-        case .system: nil
-        }
     }
 }

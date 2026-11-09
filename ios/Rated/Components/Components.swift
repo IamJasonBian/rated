@@ -31,12 +31,11 @@ struct PosterView: View {
     }
 
     private var placeholder: some View {
-        Text(title ?? "🎬")
-            .mono(max(7, min(11, height / 9)), .bold)
+        Text(height < 80 ? "" : title ?? "")
+            .font(.subheadline.weight(.semibold))
             .foregroundStyle(W.dim)
             .multilineTextAlignment(.center)
             .padding(4)
-            .minimumScaleFactor(0.6)
     }
 }
 
@@ -58,28 +57,24 @@ struct BadgeView: View {
     }
 
     var body: some View {
-        T(text)
-            .mono(8, .heavy)
+        Text(verbatim: text)
+            .font(.subheadline.weight(.semibold))
             .foregroundStyle(tint)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Capsule().fill(tint.opacity(0.15)))
             .overlay(Capsule().stroke(tint.opacity(0.35), lineWidth: 1))
+            .fixedSize()
     }
 }
 
 struct AvatarView: View {
     var initial: String
     var size: CGFloat = 32
-    var image: Data?
 
     var body: some View {
         ZStack {
             Circle().fill(W.border)
-            if let image, let ui = UIImage(data: image) {
-                Image(uiImage: ui).resizable().scaledToFill()
-            } else {
-                Text(initial).mono(size * 0.4, .bold).foregroundStyle(W.text)
-            }
+            Text(initial).font(.title2.weight(.semibold)).foregroundStyle(W.text).lineLimit(1).minimumScaleFactor(0.5)
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
@@ -89,8 +84,15 @@ struct AvatarView: View {
 struct SectionLabel: View {
     var text: String
     var body: some View {
-        T(text).mono(9, .bold).tracking(1).foregroundStyle(W.dim)
+        Text(verbatim: text).font(.subheadline.weight(.semibold)).foregroundStyle(W.dim)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+extension View {
+    /// Extends a small control's tappable area past its visual bounds without moving layout.
+    func hitArea(_ inset: CGFloat = 14) -> some View {
+        contentShape(Rectangle().inset(by: -inset))
     }
 }
 
@@ -101,11 +103,13 @@ struct Chip: View {
 
     var body: some View {
         Button(action: { Haptics.light(); action() }) {
-            T(label).mono(10, .semibold)
+            Text(verbatim: label).font(.subheadline.weight(.semibold))
                 .foregroundStyle(selected ? W.accent : W.dim)
                 .padding(.horizontal, 12).padding(.vertical, 5)
                 .background(Capsule().fill(selected ? W.accentDim : W.card))
                 .overlay(Capsule().stroke(selected ? W.accent : W.border, lineWidth: 1))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -122,8 +126,8 @@ struct RatedButton: View {
 
     var body: some View {
         Button(action: action) {
-            T(title)
-                .mono(small ? 10 : 12, .black)
+            Text(verbatim: title)
+                .font(small ? .subheadline.weight(.semibold) : .headline)
                 .foregroundStyle(fg)
                 .frame(maxWidth: .infinity, minHeight: small ? 36 : 48)
                 .background(RoundedRectangle(cornerRadius: small ? 10 : 12).fill(bg))
@@ -155,7 +159,7 @@ struct RatedButton: View {
     }
 }
 
-/// Segmented underline tab bar used by Home, Leaderboard, Profile and Notifications.
+/// Segmented underline tab bar used by Profile.
 struct UnderlineTabs<Key: Hashable>: View {
     var tabs: [(Key, String)]
     @Binding var selection: Key
@@ -168,11 +172,11 @@ struct UnderlineTabs<Key: Hashable>: View {
                     withAnimation(.snappy) { selection = key }
                 } label: {
                     VStack(spacing: 6) {
-                        Text(label).mono(10, .semibold)
+                        Text(verbatim: label).font(.subheadline.weight(.semibold))
                             .foregroundStyle(selection == key ? W.accent : W.dim)
                         Rectangle().fill(selection == key ? W.accent : .clear).frame(height: 2)
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .bottom)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -185,35 +189,16 @@ struct UnderlineTabs<Key: Hashable>: View {
 }
 
 struct EmptyStateView: View {
-    var icon: String
     var title: String
     var subtitle: String
 
     var body: some View {
         VStack(spacing: 6) {
-            T(icon).font(.system(size: 30))
-            T(title).mono(12, .bold).foregroundStyle(W.text)
-            T(subtitle).mono(10).foregroundStyle(W.dim).multilineTextAlignment(.center)
+            Text(verbatim: title).font(.subheadline.weight(.semibold)).foregroundStyle(W.text)
+            Text(verbatim: subtitle).font(.subheadline).foregroundStyle(W.dim).multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 30)
-    }
-}
-
-struct FollowPill: View {
-    var following: Bool
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(following ? "FOLLOWING" : "+ FOLLOW")
-                .mono(8, .heavy)
-                .foregroundStyle(following ? W.dim : .white)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Capsule().fill(following ? Color.clear : W.accent))
-                .overlay(Capsule().stroke(following ? W.border : .clear, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -222,6 +207,7 @@ struct SkeletonBlock: View {
     var width: CGFloat?
     var height: CGFloat
     var radius: CGFloat = 6
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dim = false
 
     var body: some View {
@@ -230,7 +216,7 @@ struct SkeletonBlock: View {
             .frame(width: width, height: height)
             .frame(maxWidth: width == nil ? .infinity : nil)
             .opacity(dim ? 0.4 : 0.9)
-            .onAppear { withAnimation(.easeInOut(duration: 0.8).repeatForever()) { dim = true } }
+            .onAppear { if !reduceMotion { withAnimation(.easeInOut(duration: 0.8).repeatForever()) { dim = true } } }
     }
 }
 
@@ -239,8 +225,8 @@ struct ToastView: View {
     var toast: Toast
 
     var body: some View {
-        T(toast.message)
-            .mono(11, .semibold)
+        Text(verbatim: toast.message)
+            .font(.subheadline.weight(.semibold))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14).padding(.vertical, 11)
@@ -249,46 +235,6 @@ struct ToastView: View {
             .shadow(color: .black.opacity(0.5), radius: 12, y: 6)
             .padding(.horizontal, 16)
             .accessibilityIdentifier("toast")
-    }
-}
-
-/// `⋯` menu offering report (with reason picker) and block — components/ReportBlockMenu.jsx.
-struct ReportBlockMenu: View {
-    @Environment(AppStore.self) private var store
-    var targetType: String
-    var targetId: String
-    var targetLabel: String
-    var targetUser: String?
-    @State private var showReasons = false
-    @State private var confirmBlock = false
-
-    var body: some View {
-        Menu {
-            Button("Report…", systemImage: "flag") { showReasons = true }
-            if let u = targetUser, !store.blockedUsers.contains(u) {
-                Button("Block \(u)", systemImage: "hand.raised", role: .destructive) { confirmBlock = true }
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(W.dim)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
-        }
-        .accessibilityLabel("More options")
-        .confirmationDialog("Why are you reporting this?", isPresented: $showReasons, titleVisibility: .visible) {
-            ForEach(Mock.reportReasons) { r in
-                Button(r.label) { store.report(type: targetType, targetId: targetId, label: targetLabel, reason: r) }
-            }
-        } message: {
-            Text("Reports are anonymous. We review every one.")
-        }
-        .alert("Block \(targetUser ?? "")?", isPresented: $confirmBlock) {
-            Button("Cancel", role: .cancel) {}
-            Button("Block", role: .destructive) { if let u = targetUser { store.block(u) } }
-        } message: {
-            Text("They won't be able to see your profile or follow you, and you'll stop seeing their activity.")
-        }
     }
 }
 
@@ -320,10 +266,10 @@ struct ImageViewer: View {
         .onTapGesture { dismiss() }
         .overlay(alignment: .topTrailing) {
             Button { dismiss() } label: {
-                Image(systemName: "xmark.circle.fill").font(.system(size: 28)).foregroundStyle(.white.opacity(0.8))
+                Text("Close").font(.body.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
             }
+            .hitArea()
             .padding()
-            .accessibilityLabel("Close")
         }
     }
 }
@@ -331,10 +277,4 @@ struct ImageViewer: View {
 struct IdentifiableURL: Identifiable {
     var url: URL
     var id: String { url.absoluteString }
-}
-
-enum ShareLinks {
-    static func movie(_ m: Movie) -> URL { URL(string: "https://rated.app/movie/\(m.id)")! }
-    static func profile(_ username: String) -> URL { URL(string: "https://rated.app/\(username)")! }
-    static func invite(_ username: String) -> URL { URL(string: "https://rated.app/invite/\(username.isEmpty ? "you" : username)")! }
 }

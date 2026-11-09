@@ -1,9 +1,9 @@
 import Foundation
 
 // Port of build/src/lib/tmdb.js. Movie data comes from the backend's /tmdb/*
-// proxy (key stays server-side); any failure falls back to the Mock catalog.
-// Every movie that flows through is indexed so `find(id:)` can resolve ids
-// from feed items, rankings and reviews synchronously.
+// proxy (key stays server-side) and falls back to the backend's own /movies
+// catalog when no TMDB key is configured. Every movie that flows through is
+// indexed so `find(id:)` can resolve ids from rankings and reviews synchronously.
 
 private struct TMDBGenre: Decodable { var id: Int; var name: String }
 private struct TMDBPerson: Decodable { var name: String; var character: String?; var job: String?; var profile_path: String? }
@@ -24,7 +24,6 @@ private struct TMDBMovie: Decodable {
     var genres: [TMDBGenre]?
     var runtime: Int?
     var vote_average: Double?
-    var vote_count: Int?
     var credits: TMDBCredits?
     var videos: TMDBVideos?
 }
@@ -47,9 +46,9 @@ final class Catalog {
     private var listCache: [String: (movies: [Movie], expires: Date)] = [:]
     private let listTTL: TimeInterval = 10 * 60
 
-    private init() {
-        for m in Mock.movies + Mock.upcoming { index[m.id] = m }
-    }
+    private init() {}
+
+    private static let tmdbImg = "https://image.tmdb.org/t/p"
 
     func register(_ movies: [Movie]) {
         for m in movies where index[m.id] == nil || m.tmdbId != nil { index[m.id] = m }
@@ -66,7 +65,7 @@ final class Catalog {
     }
 
     private static func map(_ t: TMDBMovie) -> Movie {
-        let img = Mock.tmdbImg
+        let img = tmdbImg
         let genres = (t.genres?.map(\.name) ?? (t.genre_ids ?? []).compactMap { genreNames[$0] })
             .map { $0 == "Science Fiction" ? "Sci-Fi" : $0 }
         let trailers = (t.videos?.results ?? [])
@@ -76,7 +75,7 @@ final class Catalog {
             id: "tmdb-\(t.id)", tmdbId: t.id, title: t.title ?? "Untitled",
             originalTitle: t.original_title,
             releaseYear: t.release_date.flatMap { Int($0.prefix(4)) },
-            releaseDate: t.release_date, runtimeMinutes: t.runtime,
+            runtimeMinutes: t.runtime,
             synopsis: t.overview ?? "",
             originalLanguage: t.original_language,
             isInternational: (t.original_language ?? "en") != "en",
@@ -86,8 +85,7 @@ final class Catalog {
             directors: (t.credits?.crew ?? []).filter { $0.job == "Director" }.map(\.name),
             cast: (t.credits?.cast ?? []).prefix(10).map { CastMember(name: $0.name, character: $0.character, profileURL: $0.profile_path.map { "\(img)/w185\($0)" }) },
             trailers: trailers,
-            avgUserRating: t.vote_average.map { ($0 * 10).rounded() / 10 },
-            userRatingCount: t.vote_count ?? 0
+            avgUserRating: t.vote_average.map { ($0 * 10).rounded() / 10 }
         )
     }
 
@@ -103,37 +101,57 @@ final class Catalog {
 
     func invalidate() { listCache.removeAll() }
 
+    /// Popular films, from TMDB when configured, else the backend's own catalog.
     func popular() async -> [Movie] {
-        guard var ms = await list("/tmdb/popular"), !ms.isEmpty else { return Mock.movies }
-        for i in ms.indices { ms[i].trendingRank = i + 1 }
+        if var ms = await list("/tmdb/popular"), !ms.isEmpty {
+            for i in ms.indices { ms[i].trendingRank = i + 1 }
+            return ms
+        }
+        return await backendMovies() ?? []
+    }
+
+    private func backendMovies(q: String? = nil) async -> [Movie]? {
+        guard let rows = await APIClient.shared.movies(q: q) else { return nil }
+        let ms = rows.map(Self.movie)
+        register(ms)
         return ms
     }
 
-    func upcoming() async -> [Movie] {
-        guard let ms = await list("/tmdb/upcoming"), !ms.isEmpty else { return Mock.upcoming }
-        let future = ms.filter { ($0.daysUntilRelease ?? -1) > 0 }
-        return future.isEmpty ? Mock.upcoming : future
+    /// A `movies`-table row, shaped as a catalog Movie.
+    static func movie(_ r: APIMovieRef) -> Movie {
+        Movie(id: r.movie_id, tmdbId: r.movie_id.hasPrefix("tmdb-") ? Int(r.movie_id.dropFirst(5)) : nil, title: r.title ?? "Untitled",
+              releaseYear: r.year, posterURL: r.poster_url, genres: r.genre.map { [$0] } ?? [])
     }
 
-    func topRated() async -> [Movie]? {
-        guard var ms = await list("/tmdb/top-rated") else { return nil }
-        for i in ms.indices { ms[i].globalRank = i + 1 }
-        return ms
-    }
-
-    /// TMDB search with a local title filter as the offline fallback.
-    func search(_ q: String) async -> [Movie] {
-        guard q.count >= 2 else { return [] }
-        let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q
-        if let ms = await list("/tmdb/search?q=\(enc)&page=1") { return ms }
-        let needle = q.lowercased()
-        return (Mock.movies + Mock.upcoming).filter {
-            $0.title.lowercased().contains(needle) || $0.directors.contains { $0.lowercased().contains(needle) }
+    /// Backfill titles/posters for ids missing from the index (saved/reviewed films from an earlier session).
+    func resolveUnknown(_ ids: [String]) async {
+        for id in Set(ids) where index[id] == nil {
+            if let r = await APIClient.shared.movie(id) { register([Self.movie(r)]) }
         }
     }
 
+    /// Community top list (GET /movies/top); nil when the backend is unreachable.
+    func topRated() async -> [Movie]? {
+        guard let rows = await APIClient.shared.topMovies() else { return nil }
+        let ms = rows.map { row in
+            var m = Self.movie(row.movie)
+            m.avgUserRating = row.avg_score
+            return m
+        }
+        register(ms)
+        return ms
+    }
+
+    /// Movie search: TMDB when configured, else the backend catalog. nil when the backend is unreachable.
+    func search(_ q: String) async -> [Movie]? {
+        guard q.count >= 2 else { return [] }
+        let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q
+        if let ms = await list("/tmdb/search?q=\(enc)&page=1") { return ms }
+        return await backendMovies(q: q)
+    }
+
     /// Full detail (cast, trailers, backdrop). Keeps the original id so
-    /// saved/watchlist membership still matches.
+    /// saved membership still matches.
     func detail(_ movie: Movie) async -> Movie {
         guard let tid = movie.tmdbId,
               let data = await APIClient.shared.raw("/tmdb/movie/\(tid)"),
@@ -143,7 +161,6 @@ final class Catalog {
         full.posterURL = full.posterURL ?? movie.posterURL
         full.backdropURL = full.backdropURL ?? movie.backdropURL
         full.trendingRank = movie.trendingRank
-        full.globalRank = movie.globalRank
         index[full.id] = full
         return full
     }

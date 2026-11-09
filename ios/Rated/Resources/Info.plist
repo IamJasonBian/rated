@@ -33,10 +33,6 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Rated connects to your development API server on the local network.</string>
-	<key>NSContactsUsageDescription</key>
-	<string>Rated hashes your contacts on-device to find friends who are already on Rated.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Choose a profile photo.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
