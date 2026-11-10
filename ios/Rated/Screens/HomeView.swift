@@ -5,6 +5,7 @@ struct HomeView: View {
     @Environment(AppStore.self) private var store
     @State private var loaded = false
     @State private var highlights: [Movie] = []
+    @State private var forYou: [(movie: Movie, because: [String])] = []
 
     var body: some View {
         ScrollView {
@@ -15,6 +16,15 @@ struct HomeView: View {
                 } else if highlights.isEmpty {
                     errorBanner
                 } else {
+                    if !forYou.isEmpty {
+                        SectionLabel(text: "For you")
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(alignment: .top, spacing: 10) {
+                                ForEach(forYou, id: \.movie.id) { rec in forYouCard(rec.movie, because: rec.because) }
+                            }
+                        }
+                        .accessibilityIdentifier("home-for-you")
+                    }
                     SectionLabel(text: "Highlights")
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 10)], spacing: 14) {
                         ForEach(highlights) { m in highlightCard(m) }
@@ -35,7 +45,24 @@ struct HomeView: View {
     }
 
     private func load() async {
-        highlights = await Catalog.shared.popular()
+        async let pop = Catalog.shared.popular()
+        if let uid = store.userId { forYou = await Catalog.shared.forYou(uid) }
+        highlights = await pop
+    }
+
+    private func forYouCard(_ m: Movie, because: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            NavigationLink(value: Route.movie(m)) {
+                PosterView(url: m.posterURL, title: m.title, width: 105, height: 148, radius: 12)
+            }
+            .accessibilityIdentifier("foryou-\(m.id)")
+            Text(m.title).font(.subheadline.weight(.semibold)).foregroundStyle(W.text).lineLimit(1)
+            if !because.isEmpty {
+                Text("Loved by \(because.prefix(2).joined(separator: ", "))")
+                    .font(.subheadline).foregroundStyle(W.dim).lineLimit(2)
+            }
+        }
+        .frame(width: 105)
     }
 
     private var header: some View {

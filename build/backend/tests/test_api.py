@@ -1345,3 +1345,40 @@ def test_ticket_cta_affiliate_wrapping(client, monkeypatch):
 def test_ticket_cta_unknown_movie(client):
     me = _login(client)
     assert client.get(f"/users/{me}/movies/nope/tickets").status_code == 404
+
+
+def test_recommendations_cold_start_falls_back_to_popular(client):
+    me = _login(client)
+    body = client.get(f"/users/{me}/recommendations").json()
+    assert body and all(r["reason"] == "popular" for r in body)
+    assert body == sorted(body, key=lambda r: r["predicted"], reverse=True)
+
+
+def test_recommendations_follow_similar_taste(client):
+    me, hdrs = _authed_login(client)
+    # Love Sci-Fi/Action like jasonk + carlos; hate Parasite (cinephile/reeltalks' top).
+    for movie_id, score in [("m-001", 10), ("m-003", 9), ("m-002", 2)]:
+        client.post(f"/users/{me}/rankings", json={"movie_id": movie_id, "score": score},
+                    headers=hdrs)
+    body = client.get(f"/users/{me}/recommendations").json()
+    ids = [r["movie"]["movie_id"] for r in body]
+    assert set(ids) == {"m-004", "m-005"}            # never rated ones
+    assert all(r["reason"] == "similar_taste" for r in body)
+    assert ids[0] == "m-005"                          # carlos (closest taste) gave RRR a 10
+    assert "carlos" in body[0]["because"]
+
+
+def test_recommendations_followee_boost(client):
+    me, hdrs = _authed_login(client)
+    client.post(f"/users/{me}/rankings", json={"movie_id": "m-001", "score": 9}, headers=hdrs)
+    before = {r["movie"]["movie_id"]: r["support"]
+              for r in client.get(f"/users/{me}/recommendations").json()}
+    josh = client.get("/users/by-username/josh").json()   # rated RRR + Parasite, not m-001
+    client.post(f"/users/{me}/follow", json={"followee_id": josh["user_id"]}, headers=hdrs)
+    after = {r["movie"]["movie_id"]: r for r in client.get(f"/users/{me}/recommendations").json()}
+    assert after["m-005"]["support"] > before.get("m-005", 0)
+    assert "josh" in after["m-005"]["because"]
+
+
+def test_recommendations_unknown_user(client):
+    assert client.get("/users/nope/recommendations").status_code == 404

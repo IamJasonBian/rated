@@ -42,6 +42,7 @@ from db import get_db, init_db, SessionLocal
 from logging_config import configure_logging, get_logger, init_sentry
 from models import FollowRow, MovieRow, RankingRow, ReviewRow, UserRow
 from rated_backend import App, Movie
+import recommend
 import tickets
 import tmdb
 
@@ -826,6 +827,51 @@ def get_ticket_cta(user_id: str, movie_id: str, db: Session = Depends(get_db)):
         "label":        "Buy tickets",
         **tickets.ticket_link(movie.title),
     }
+
+
+@app.get("/users/{user_id}/recommendations", tags=["Movies"])
+def get_recommendations(user_id: str, n: int = 10, db: Session = Depends(get_db)):
+    """"For you" picks: unrated movies scored by raters with similar taste
+    (followees boosted). Cold start (no ratings yet) falls back to the
+    leaderboard with `reason: "popular"`."""
+    if not db.get(UserRow, user_id):
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+    n = max(1, min(n, 50))
+    following = set(db.execute(
+        select(FollowRow.followee_id)
+        .where(FollowRow.follower_id == user_id, FollowRow.state == "approved")
+    ).scalars())
+    ratings = db.execute(
+        select(RankingRow.user_id, RankingRow.movie_id, RankingRow.score)
+    ).all()
+    recs = recommend.recommend(user_id, [tuple(r) for r in ratings], following, n)
+    if not recs:
+        return [
+            {"movie": m.to_dict(), "predicted": round(float(s), 2),
+             "support": 0.0, "because": [], "reason": "popular"}
+            for m, s in app_instance.ranking_service.top_movies(db, n)
+        ]
+    users = {
+        u.user_id: u.username or u.name
+        for u in db.execute(select(UserRow).where(
+            UserRow.user_id.in_({b for r in recs for b in r["because"]})
+        )).scalars()
+    }
+    movies = {
+        m.movie_id: m for m in db.execute(select(MovieRow).where(
+            MovieRow.movie_id.in_([r["movie_id"] for r in recs])
+        )).scalars()
+    }
+    return [
+        {
+            "movie":     movies[r["movie_id"]].to_dict(),
+            "predicted": r["predicted"],
+            "support":   r["support"],
+            "because":   [users.get(b, b) for b in r["because"]],
+            "reason":    "similar_taste",
+        }
+        for r in recs if r["movie_id"] in movies
+    ]
 
 
 @app.post("/users/{user_id}/pairwise", tags=["Rankings"])

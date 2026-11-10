@@ -130,6 +130,18 @@ final class Catalog {
         }
     }
 
+    /// Personalized "For you" picks with who loved them; empty for cold-start
+    /// users (the backend's popular fallback already shows as Highlights).
+    func forYou(_ uid: String) async -> [(movie: Movie, because: [String])] {
+        guard let rows = await APIClient.shared.recommendations(uid) else { return [] }
+        return rows.filter { $0.reason == "similar_taste" }.map { r in
+            let known = find(r.movie.movie_id)
+            let m = known?.posterURL != nil ? known! : Self.movie(r.movie)
+            register([m])
+            return (m, r.because)
+        }
+    }
+
     /// Community top list (GET /movies/top); nil when the backend is unreachable.
     func topRated() async -> [Movie]? {
         guard let rows = await APIClient.shared.topMovies() else { return nil }

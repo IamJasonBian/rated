@@ -56,6 +56,7 @@ struct APIReview: Decodable {
 
 struct APIUsernameCheck: Decodable { var available: Bool }
 struct APITopMovie: Decodable { var movie: APIMovieRef; var avg_score: Double }
+struct APIRecommendation: Decodable { var movie: APIMovieRef; var predicted: Double; var because: [String]; var reason: String }
 struct Empty: Decodable {}
 
 struct MovieMeta: Encodable {
@@ -178,6 +179,7 @@ final class APIClient: @unchecked Sendable {
     func movie(_ id: String) async -> APIMovieRef? { await call("GET", "/movies/\(esc(id))") }
 
     func topMovies(n: Int = 20) async -> [APITopMovie]? { await call("GET", "/movies/top?n=\(n)") }
+    func recommendations(_ uid: String, n: Int = 10) async -> [APIRecommendation]? { await call("GET", "/users/\(uid)/recommendations?n=\(n)") }
 
     // MARK: Saved / watchlist / reviews
 
