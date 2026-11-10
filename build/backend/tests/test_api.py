@@ -61,6 +61,26 @@ def test_seeded_movies(client):
     assert titles == {"Interstellar", "Parasite", "The Dark Knight", "Whiplash", "RRR"}
 
 
+
+def test_seeded_movies_have_posters_and_startup_backfills_nulls(client):
+    import api
+    from fastapi.testclient import TestClient
+    from models import MovieRow
+
+    assert all(m["poster_url"] for m in client.get("/movies").json())
+
+    db = api.SessionLocal()
+    db.get(MovieRow, "m-001").poster_url = None
+    db.get(MovieRow, "m-002").poster_url = "https://example.com/custom.jpg"
+    db.commit()
+    db.close()
+
+    with TestClient(api.app) as c:  # re-runs startup against the populated DB
+        posters = {m["movie_id"]: m["poster_url"] for m in c.get("/movies").json()}
+    assert posters["m-001"] == "https://image.tmdb.org/t/p/w500/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg"
+    assert posters["m-002"] == "https://example.com/custom.jpg"
+
+
 def test_top_movies(client):
     """/movies/top must register before /movies/{movie_id} so 'top' isn't
     interpreted as a movie_id. Regression test for that route ordering."""

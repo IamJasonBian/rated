@@ -85,6 +85,7 @@ async def lifespan(_app: FastAPI):
             print("[seed] inserted fixture movies + 8 mock users + rankings")
         else:
             print("[startup] DB has data — skipping seed")
+            app_instance.seed_movies(db, _seed_movies())  # backfills null posters
     finally:
         db.close()
     yield
@@ -116,7 +117,9 @@ app.add_middleware(
 # slowapi is in-process — fine for a single uvicorn worker. For multi-worker
 # Postgres-backed deploys, swap the storage backend to redis://. The keys are
 # the client IP (or X-Forwarded-For when behind a proxy).
-limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+# RATE_LIMITS=0 disables them — only for local load sims (build/loadsim).
+limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"],
+                  enabled=os.environ.get("RATE_LIMITS", "1") != "0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -278,14 +281,21 @@ def require_agent(
 # ─── Initial seed ─────────────────────────────────────────────────────────────
 # Schema init + seed runs from the lifespan handler above on app startup.
 
+_TMDB_POSTER = "https://image.tmdb.org/t/p/w500"
+
+
+def _seed_movies() -> list[MovieRow]:
+    return [
+        Movie("m-001", "Interstellar",    "Sci-Fi",   f"{_TMDB_POSTER}/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg", 2014),
+        Movie("m-002", "Parasite",        "Thriller", f"{_TMDB_POSTER}/7IiTTgloJzvGI1TAYymCfbfl3vT.jpg", 2019),
+        Movie("m-003", "The Dark Knight", "Action",   f"{_TMDB_POSTER}/qJ2tW6WMUDux911r6m7haRef0WH.jpg", 2008),
+        Movie("m-004", "Whiplash",        "Drama",    f"{_TMDB_POSTER}/7fn624j5lj3xTme2SgiLCeuedmO.jpg", 2014),
+        Movie("m-005", "RRR",             "Action",   f"{_TMDB_POSTER}/wE0I6efAW4cDDmZQWtwZMOW44EJ.jpg", 2022),
+    ]
+
+
 def _seed_initial(db: Session) -> None:
-    app_instance.seed_movies(db, [
-        Movie("m-001", "Interstellar",       "Sci-Fi",   year=2014),
-        Movie("m-002", "Parasite",           "Thriller", year=2019),
-        Movie("m-003", "The Dark Knight",    "Action",   year=2008),
-        Movie("m-004", "Whiplash",           "Drama",    year=2014),
-        Movie("m-005", "RRR",                "Action",   year=2022),
-    ])
+    app_instance.seed_movies(db, _seed_movies())
 
     def _user(username, name, email):
         user = app_instance.auth.google_login(db, f"sub_seed_{username}|{name}|{email}")
@@ -829,6 +839,23 @@ def get_ticket_cta(user_id: str, movie_id: str, db: Session = Depends(get_db)):
     }
 
 
+_RATINGS_TTL = 60.0
+_ratings_cache: dict[str, Any] = {"at": 0.0, "by_user": {}}
+
+
+def _all_ratings(db: Session) -> dict[str, dict[str, int]]:
+    """Every rating grouped by user, reloaded at most once per _RATINGS_TTL.
+    Others' new ratings show up within a minute; the viewer's own are read
+    fresh per request."""
+    now = time.monotonic()
+    if now - _ratings_cache["at"] > _RATINGS_TTL:
+        _ratings_cache["by_user"] = recommend.group_by_user(db.execute(
+            select(RankingRow.user_id, RankingRow.movie_id, RankingRow.score)
+        ).all())
+        _ratings_cache["at"] = now
+    return _ratings_cache["by_user"]
+
+
 @app.get("/users/{user_id}/recommendations", tags=["Movies"])
 def get_recommendations(user_id: str, n: int = 10, db: Session = Depends(get_db)):
     """"For you" picks: unrated movies scored by raters with similar taste
@@ -841,10 +868,11 @@ def get_recommendations(user_id: str, n: int = 10, db: Session = Depends(get_db)
         select(FollowRow.followee_id)
         .where(FollowRow.follower_id == user_id, FollowRow.state == "approved")
     ).scalars())
-    ratings = db.execute(
-        select(RankingRow.user_id, RankingRow.movie_id, RankingRow.score)
-    ).all()
-    recs = recommend.recommend(user_id, [tuple(r) for r in ratings], following, n)
+    by_user = dict(_all_ratings(db))
+    by_user[user_id] = dict(db.execute(
+        select(RankingRow.movie_id, RankingRow.score).where(RankingRow.user_id == user_id)
+    ).all())
+    recs = recommend.recommend(user_id, by_user, following, n)
     if not recs:
         return [
             {"movie": m.to_dict(), "predicted": round(float(s), 2),
@@ -1159,7 +1187,8 @@ async def tmdb_search(q: str, page: int = 1):
 
 @app.get("/tmdb/movie/{tmdb_id}", tags=["TMDB"])
 async def tmdb_movie(tmdb_id: int):
-    return await _proxy_tmdb(f"/movie/{tmdb_id}", ttl=tmdb.TMDB_DETAIL_TTL)
+    return await _proxy_tmdb(f"/movie/{tmdb_id}", {"append_to_response": "videos,credits"},
+                             ttl=tmdb.TMDB_DETAIL_TTL)
 
 
 @app.get("/tmdb/cache-stats", tags=["TMDB"])

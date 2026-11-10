@@ -18,9 +18,17 @@ MIN_SIM = 0.05
 PRIOR = 1.0         # pseudo-weight pulling thin-evidence picks toward the global mean
 
 
+def group_by_user(rows) -> dict[str, dict[str, int]]:
+    """(user_id, movie_id, score) rows -> {user_id: {movie_id: score}}."""
+    by_user: dict[str, dict[str, int]] = defaultdict(dict)
+    for user_id, movie_id, score in rows:
+        by_user[user_id][movie_id] = score
+    return dict(by_user)
+
+
 def recommend(
     viewer_id: str,
-    ratings: list[tuple[str, str, int]],
+    by_user: dict[str, dict[str, int]],
     following: set[str],
     n: int = 10,
 ) -> list[dict]:
@@ -28,7 +36,7 @@ def recommend(
 
     Args:
         viewer_id: User to recommend for.
-        ratings: Every (user_id, movie_id, score) row.
+        by_user: user_id -> {movie_id: score} for every rater.
         following: user_ids the viewer follows (approved).
         n: Max results.
 
@@ -37,9 +45,6 @@ def recommend(
         `because` lists up to 3 most-similar raters who scored it >= 8.
         Empty when the viewer has rated nothing.
     """
-    by_user: dict[str, dict[str, int]] = defaultdict(dict)
-    for user_id, movie_id, score in ratings:
-        by_user[user_id][movie_id] = score
     mine = by_user.get(viewer_id, {})
     if not mine:
         return []
@@ -58,7 +63,8 @@ def recommend(
         if sim >= MIN_SIM:
             sims[user_id] = sim
 
-    prior = sum(s for _, _, s in ratings) / len(ratings)
+    n_scores = sum(len(m) for m in by_user.values())
+    prior = sum(sum(m.values()) for m in by_user.values()) / n_scores
     weighted: dict[str, float] = defaultdict(float)
     weight: dict[str, float] = defaultdict(float)
     fans: dict[str, list[tuple[float, str]]] = defaultdict(list)

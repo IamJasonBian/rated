@@ -973,7 +973,11 @@ class App:
         db.commit()
 
     def seed_movies(self, db: Session, movies: list[MovieRow]) -> None:
+        """Insert missing movies; fill poster_url on existing rows where it is null."""
         for m in movies:
-            if not db.get(MovieRow, m.movie_id):
+            row = db.get(MovieRow, m.movie_id)
+            if not row:
                 db.add(m)
+            elif row.poster_url is None and m.poster_url:
+                row.poster_url = m.poster_url
         db.commit()
